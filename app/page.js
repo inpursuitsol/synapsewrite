@@ -1,14 +1,13 @@
+// app/page.js
 "use client";
 
 import { useState, useRef } from "react";
 
 /**
- * Polished UI for SynapseWrite:
- * - Tailwind-powered layout
- * - Smooth loading animation
- * - Tagline, copy & download actions
- * - Scrollable result box with word count + read time
- * - Friendly errors
+ * Polished streaming UI for SynapseWrite.
+ * - Appends server-streamed chunks live
+ * - Falls back to JSON response if server returns application/json
+ * - Includes branding, tagline, copy/download, read-time, nice visuals
  */
 
 export default function HomePage() {
@@ -18,15 +17,13 @@ export default function HomePage() {
   const [error, setError] = useState(null);
   const resultRef = useRef(null);
 
-  // Utility: compute words & estimated read time
   const getStats = (text) => {
     if (!text) return { words: 0, minutes: 0 };
     const words = text.trim().split(/\s+/).filter(Boolean).length;
-    const minutes = Math.max(1, Math.round(words / 200)); // ~200 WPM
+    const minutes = Math.max(1, Math.round(words / 200));
     return { words, minutes };
   };
 
-  // Copy text to clipboard
   const copyToClipboard = async (text) => {
     try {
       await navigator.clipboard.writeText(text);
@@ -36,7 +33,6 @@ export default function HomePage() {
     }
   };
 
-  // Download as markdown file
   const downloadArticle = (title = "article", content = "") => {
     const blob = new Blob([`# ${title}\n\n${content}`], { type: "text/markdown" });
     const url = URL.createObjectURL(blob);
@@ -49,14 +45,12 @@ export default function HomePage() {
     URL.revokeObjectURL(url);
   };
 
-  // Main API call
   async function generateArticle(topic) {
     if (!topic || !topic.trim()) {
       setError("Please enter a topic to generate an article.");
       return;
     }
 
-    // Analytics (Plausible) — will no-op if not present
     if (typeof window !== "undefined" && window.plausible) {
       window.plausible("Generate Article");
     }
@@ -72,22 +66,42 @@ export default function HomePage() {
         body: JSON.stringify({ topic }),
       });
 
-      if (!res.ok) {
-        let errText = "Something went wrong. Please try again.";
-        try {
-          const j = await res.json();
-          if (j?.error) errText = j.error;
-        } catch (e) {}
-        throw new Error(errText);
+      const contentType = res.headers.get("content-type") || "";
+
+      // Case A: server returned a JSON (non-stream fallback)
+      if (contentType.includes("application/json")) {
+        const data = await res.json();
+        if (!res.ok) {
+          const err = data?.error ?? "Something went wrong. Try again.";
+          throw new Error(err);
+        }
+        if (!data?.content) throw new Error("No content returned from server.");
+        setResult(data.content);
+        setTimeout(() => resultRef.current?.scrollIntoView({ behavior: "smooth" }), 150);
+        return;
       }
 
-      const data = await res.json();
-      if (!data?.content) {
-        throw new Error("No content returned from the server. Try again.");
+      // Case B: server is streaming plain text chunks (our preferred path)
+      if (!res.body) {
+        throw new Error("No response body from server.");
       }
 
-      setResult(data.content);
-      // scroll result into view smoothly
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let done = false;
+      let accumulated = "";
+
+      while (!done) {
+        const { value, done: doneReading } = await reader.read();
+        done = doneReading;
+        if (value) {
+          accumulated += decoder.decode(value, { stream: true });
+          setResult(accumulated);
+        }
+      }
+
+      // final decode (just in case)
+      setResult((prev) => prev + decoder.decode());
       setTimeout(() => resultRef.current?.scrollIntoView({ behavior: "smooth" }), 150);
     } catch (err) {
       const msg = err?.message ?? "Unknown error. Try again.";
@@ -101,59 +115,60 @@ export default function HomePage() {
   const { words, minutes } = getStats(result);
 
   return (
-    <main className="min-h-screen bg-gradient-to-b from-white to-gray-50 p-6 flex items-start justify-center">
-      <div className="w-full max-w-3xl">
-        <header className="mb-8">
-          <div className="flex items-center justify-between">
-            <div>
-              <h1 className="text-3xl font-extrabold leading-tight">📝 SynapseWrite</h1>
-              <p className="text-sm text-gray-600 mt-1">
-                Your AI writing co-pilot — generate polished blog articles in seconds.
-              </p>
-            </div>
-            <div className="text-right">
-              <a
-                href="https://synapsewrite.ai"
-                className="text-xs text-gray-500 hover:underline"
-                target="_blank"
-                rel="noreferrer"
-              >
-                synapsewrite.ai
-              </a>
-              <div className="mt-2 text-right text-xs text-gray-400">Beta</div>
-            </div>
+    <main style={{ minHeight: "100vh", fontFamily: "Inter, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial" }}>
+      <div style={{ maxWidth: 920, margin: "30px auto", padding: "20px" }}>
+        <header style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
+          <div>
+            <h1 style={{ margin: 0, fontSize: 28, fontWeight: 800 }}>📝 SynapseWrite</h1>
+            <p style={{ margin: "6px 0 0", color: "#6b7280" }}>Your AI writing co-pilot — craft polished articles in seconds.</p>
+          </div>
+
+          <div style={{ textAlign: "right" }}>
+            <a href="https://synapsewrite.ai" target="_blank" rel="noreferrer" style={{ color: "#6b7280", fontSize: 13 }}>synapsewrite.ai</a>
+            <div style={{ fontSize: 12, color: "#9ca3af", marginTop: 6 }}>Beta</div>
           </div>
         </header>
 
-        {/* Input Card */}
-        <section className="bg-white border border-gray-200 rounded-2xl p-6 shadow-sm">
-          <label className="block text-sm font-medium text-gray-700 mb-2">Article topic</label>
-          <div className="flex gap-3 items-start">
+        {/* Input card */}
+        <section style={{ background: "#fff", border: "1px solid #e6e6e6", borderRadius: 14, padding: 20, boxShadow: "0 4px 20px rgba(15,23,42,0.03)" }}>
+          <label style={{ display: "block", fontSize: 13, color: "#374151", marginBottom: 8 }}>Article topic</label>
+          <div style={{ display: "flex", gap: 12, alignItems: "flex-start" }}>
             <input
               value={topic}
               onChange={(e) => setTopic(e.target.value)}
-              placeholder="e.g., Top AI tools in 2025 — impact, use cases, and examples"
-              className="flex-1 p-3 rounded-lg border border-gray-200 focus:outline-none focus:ring-2 focus:ring-indigo-300 transition"
+              placeholder='e.g., "Top AI tools in 2025 — impact, use cases, examples"'
+              style={{
+                flex: 1,
+                padding: "12px 14px",
+                borderRadius: 10,
+                border: "1px solid #e5e7eb",
+                outline: "none",
+                fontSize: 15,
+              }}
             />
 
-            <div className="flex flex-col gap-2">
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
               <button
                 onClick={() => generateArticle(topic)}
                 disabled={loading}
-                className={`inline-flex items-center gap-2 px-4 py-2 rounded-lg font-medium shadow-sm text-white ${
-                  loading ? "bg-indigo-300 cursor-not-allowed" : "bg-indigo-600 hover:bg-indigo-700"
-                }`}
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: 10,
+                  padding: "10px 14px",
+                  borderRadius: 10,
+                  border: "none",
+                  color: "#fff",
+                  background: loading ? "#93c5fd" : "#2563eb",
+                  cursor: loading ? "not-allowed" : "pointer",
+                  fontWeight: 600,
+                }}
               >
                 {loading ? (
                   <>
-                    <svg
-                      className="animate-spin h-5 w-5 text-white"
-                      xmlns="http://www.w3.org/2000/svg"
-                      fill="none"
-                      viewBox="0 0 24 24"
-                    >
-                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"></path>
+                    <svg style={{ width: 18, height: 18 }} className="spin" viewBox="0 0 24 24" fill="none">
+                      <circle cx="12" cy="12" r="10" stroke="rgba(255,255,255,0.35)" strokeWidth="4"></circle>
+                      <path d="M4 12a8 8 0 018-8v8z" fill="white"></path>
                     </svg>
                     Generating...
                   </>
@@ -168,7 +183,7 @@ export default function HomePage() {
                   setResult("");
                   setError(null);
                 }}
-                className="text-xs text-gray-500 hover:text-gray-700"
+                style={{ background: "transparent", border: "none", color: "#6b7280", fontSize: 13, cursor: "pointer" }}
               >
                 Clear
               </button>
@@ -176,81 +191,57 @@ export default function HomePage() {
           </div>
 
           {error && (
-            <div className="mt-4 text-sm text-red-600 bg-red-50 border border-red-100 p-3 rounded">
+            <div style={{ marginTop: 12, color: "#b91c1c", background: "#fff1f2", border: "1px solid #fee2e2", padding: 12, borderRadius: 8 }}>
               ⚠️ {error}
             </div>
           )}
         </section>
 
-        {/* Result / Controls */}
-        <section className="mt-6">
-          <div className="flex items-center justify-between mb-3">
-            <div className="text-sm text-gray-600">
-              <span className="font-medium">{words}</span> words • <span className="font-medium">{minutes}</span> min read
+        {/* Result header + actions */}
+        <section style={{ marginTop: 18 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+            <div style={{ color: "#6b7280", fontSize: 13 }}>
+              <strong style={{ color: "#111827" }}>{words}</strong> words • <strong style={{ color: "#111827" }}>{minutes}</strong> min read
             </div>
 
-            <div className="flex items-center gap-3">
-              <button
-                onClick={() => result && copyToClipboard(result)}
-                disabled={!result}
-                className="px-3 py-1 bg-white border border-gray-200 rounded-md text-sm hover:shadow-sm disabled:opacity-50"
-              >
+            <div style={{ display: "flex", gap: 8 }}>
+              <button onClick={() => result && copyToClipboard(result)} disabled={!result} style={{ padding: "8px 10px", borderRadius: 8, border: "1px solid #e6e6e6", background: "#fff", cursor: result ? "pointer" : "not-allowed" }}>
                 Copy
               </button>
-
-              <button
-                onClick={() => result && downloadArticle(topic || "article", result)}
-                disabled={!result}
-                className="px-3 py-1 bg-white border border-gray-200 rounded-md text-sm hover:shadow-sm disabled:opacity-50"
-              >
+              <button onClick={() => result && downloadArticle(topic || "article", result)} disabled={!result} style={{ padding: "8px 10px", borderRadius: 8, border: "1px solid #e6e6e6", background: "#fff", cursor: result ? "pointer" : "not-allowed" }}>
                 Download
               </button>
-
-              <button
-                onClick={() => generateArticle(topic)}
-                disabled={loading || !topic.trim()}
-                className="px-3 py-1 bg-white border border-gray-200 rounded-md text-sm hover:shadow-sm disabled:opacity-50"
-              >
+              <button onClick={() => generateArticle(topic)} disabled={loading || !topic.trim()} style={{ padding: "8px 10px", borderRadius: 8, border: "1px solid #e6e6e6", background: "#fff", cursor: loading || !topic.trim() ? "not-allowed" : "pointer" }}>
                 Regenerate
               </button>
             </div>
           </div>
 
-          <div
-            ref={resultRef}
-            className="bg-white border border-gray-200 rounded-xl p-6 shadow-sm max-h-[60vh] overflow-y-auto prose prose-sm sm:prose lg:prose-base"
-          >
-            {/* If no result yet, show a friendly placeholder */}
+          <div ref={resultRef} style={{ background: "#fff", border: "1px solid #e6e6e6", borderRadius: 12, padding: 20, maxHeight: "62vh", overflowY: "auto", boxShadow: "0 6px 24px rgba(15,23,42,0.03)" }}>
             {!result && !loading && (
-              <div className="text-gray-500">
-                Your generated article will appear here. Try a topic like{" "}
-                <span className="text-indigo-600">"Top AI tools in 2025"</span>.
+              <div style={{ color: "#6b7280" }}>
+                Your generated article will appear here. Try a topic like <span style={{ color: "#2563eb" }}>"Top AI tools in 2025"</span>.
               </div>
             )}
 
-            {/* Loading small skeleton */}
             {loading && (
-              <div className="animate-pulse space-y-2">
-                <div className="h-6 bg-gray-200 rounded w-3/4" />
-                <div className="h-4 bg-gray-200 rounded w-5/6" />
-                <div className="h-4 bg-gray-200 rounded w-full" />
-                <div className="h-4 bg-gray-200 rounded w-full" />
-                <div className="h-4 bg-gray-200 rounded w-4/5" />
+              <div style={{ opacity: 0.9 }}>
+                <div style={{ height: 16, background: "#f3f4f6", borderRadius: 6, marginBottom: 8 }} />
+                <div style={{ height: 12, background: "#f3f4f6", borderRadius: 6, marginBottom: 6 }} />
+                <div style={{ height: 12, background: "#f3f4f6", borderRadius: 6, marginBottom: 6 }} />
+                <div style={{ height: 12, background: "#f3f4f6", borderRadius: 6, width: "85%" }} />
               </div>
             )}
 
-            {/* Render result */}
             {result && !loading && (
-              <article>
-                {/* If the model returns markdown/listing, we render as plain text preserving newlines */}
-                <div style={{ whiteSpace: "pre-wrap" }}>{result}</div>
+              <article style={{ whiteSpace: "pre-wrap", color: "#111827", lineHeight: 1.6 }}>
+                {result}
               </article>
             )}
           </div>
         </section>
 
-        {/* Footer / microcopy */}
-        <footer className="mt-6 text-xs text-gray-400">
+        <footer style={{ marginTop: 18, color: "#9ca3af", fontSize: 13 }}>
           Generated content may require editing. SynapseWrite does not store your data permanently unless you enable save.
         </footer>
       </div>
