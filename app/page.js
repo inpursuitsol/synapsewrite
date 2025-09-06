@@ -1,58 +1,96 @@
-// app/page.js
 "use client";
 import { useState } from "react";
 
-export default function Home() {
+export default function HomePage() {
   const [topic, setTopic] = useState("");
   const [result, setResult] = useState("");
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
 
-  async function generateArticle() {
-    setLoading(true);
-    setResult("");
-
+  // Handles calling the API and updating UI
+  async function generateArticle(topic) {
     try {
+      setError(null);
+      setLoading(true);
+      setResult("");
+
       const res = await fetch("/api/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ topic }),
       });
 
+      if (!res.ok) {
+        let errText = "Something went wrong. Please try again.";
+        try {
+          const j = await res.json();
+          if (j?.error) errText = j.error;
+        } catch (e) {}
+        throw new Error(errText);
+      }
+
       const data = await res.json();
+      if (!data?.content) {
+        throw new Error("No content returned from the server. Try again.");
+      }
+
       setResult(data.content);
     } catch (err) {
-      console.error(err);
-      setResult("Error generating content. Please try again.");
+      const msg = err?.message ?? "Unknown error. Try again.";
+      setError(msg);
+      console.error("Generate error:", err);
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
   }
 
   return (
-    <main className="flex min-h-screen flex-col items-center justify-center p-6 bg-gray-50">
-      <h1 className="text-3xl font-bold mb-6">📝 SynapseWrite</h1>
-      <input
-        type="text"
-        placeholder="Enter a topic..."
-        value={topic}
-        onChange={(e) => setTopic(e.target.value)}
-        className="border p-2 rounded w-80 mb-4"
-      />
-      <button
-        onClick={generateArticle}
-        className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700"
-        disabled={loading}
-      >
-        {loading ? "Generating..." : "Generate Article"}
-      </button>
+    <main style={{ padding: "2rem", fontFamily: "sans-serif" }}>
+      <h1>📝 SynapseWrite</h1>
 
-      <div className="mt-6 w-full max-w-2xl">
-        {result && (
-          <div className="p-4 bg-white rounded shadow">
-            <h2 className="font-semibold mb-2">Result:</h2>
-            <p className="whitespace-pre-wrap">{result}</p>
-          </div>
-        )}
+      <div style={{ marginBottom: "1rem" }}>
+        <input
+          type="text"
+          value={topic}
+          onChange={(e) => setTopic(e.target.value)}
+          placeholder="Enter a topic..."
+          style={{
+            padding: "0.5rem",
+            fontSize: "1rem",
+            width: "300px",
+            marginRight: "0.5rem",
+          }}
+        />
+        <button
+          onClick={() => generateArticle(topic)}
+          disabled={loading || !topic.trim()}
+          style={{
+            padding: "0.5rem 1rem",
+            fontSize: "1rem",
+            cursor: loading ? "not-allowed" : "pointer",
+          }}
+        >
+          {loading ? "Generating..." : "Generate Article"}
+        </button>
       </div>
+
+      {error && (
+        <div style={{ color: "red", marginBottom: "1rem" }}>⚠️ {error}</div>
+      )}
+
+      {result && (
+        <div
+          style={{
+            whiteSpace: "pre-wrap",
+            border: "1px solid #ddd",
+            padding: "1rem",
+            borderRadius: "8px",
+            background: "#fafafa",
+          }}
+        >
+          {result}
+        </div>
+      )}
     </main>
   );
 }
