@@ -9,6 +9,11 @@ export default function HomePage() {
 
   // Handles calling the API and updating UI
   async function generateArticle(topic) {
+    // Track event in Plausible
+    if (typeof window !== "undefined" && window.plausible) {
+      window.plausible("Generate Article");
+    }
+
     try {
       setError(null);
       setLoading(true);
