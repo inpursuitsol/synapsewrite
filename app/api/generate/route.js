@@ -14,14 +14,20 @@ export async function POST(req) {
         { role: "system", content: "You are a helpful content generator." },
         { role: "user", content: `Write a detailed blog article about: ${topic}` }
       ],
-      max_tokens: 500,
+      // increased to allow longer articles; adjust up if needed
+      max_tokens: 1500,
+      temperature: 0.7,
     });
 
-    return new Response(
-      JSON.stringify({ content: completion.choices[0].message.content }),
-      { status: 200 }
-    );
+    const content =
+      completion?.choices?.[0]?.message?.content ?? "No content returned from model.";
+
+    // Log (server-side) so we can check if API returned full content
+    console.log("Generated length:", content.length);
+
+    return new Response(JSON.stringify({ content }), { status: 200 });
   } catch (error) {
-    return new Response(JSON.stringify({ error: error.message }), { status: 500 });
+    console.error("Generate error:", error);
+    return new Response(JSON.stringify({ error: error.message || String(error) }), { status: 500 });
   }
 }
