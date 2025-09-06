@@ -4,10 +4,10 @@
 import { useState, useRef } from "react";
 
 /**
- * Polished streaming UI for SynapseWrite.
- * - Appends server-streamed chunks live
- * - Falls back to JSON response if server returns application/json
- * - Includes branding, tagline, copy/download, read-time, nice visuals
+ * Tailwind-based polished page for SynapseWrite.
+ * - Streaming-capable: appends text chunks as they arrive
+ * - Uses Tailwind classes for look & feel
+ * - Includes inline SVG logo, copy/download/regenerate, word count + read-time
  */
 
 export default function HomePage() {
@@ -27,6 +27,7 @@ export default function HomePage() {
   const copyToClipboard = async (text) => {
     try {
       await navigator.clipboard.writeText(text);
+      // friendly toast fallback
       alert("Article copied to clipboard ✅");
     } catch (e) {
       alert("Unable to copy — please select and copy manually.");
@@ -51,6 +52,7 @@ export default function HomePage() {
       return;
     }
 
+    // Plausible analytics event (no-op if Plausible not present)
     if (typeof window !== "undefined" && window.plausible) {
       window.plausible("Generate Article");
     }
@@ -68,7 +70,7 @@ export default function HomePage() {
 
       const contentType = res.headers.get("content-type") || "";
 
-      // Case A: server returned a JSON (non-stream fallback)
+      // Fallback: JSON (non-stream)
       if (contentType.includes("application/json")) {
         const data = await res.json();
         if (!res.ok) {
@@ -81,7 +83,7 @@ export default function HomePage() {
         return;
       }
 
-      // Case B: server is streaming plain text chunks (our preferred path)
+      // Streaming path: read plain text chunks
       if (!res.body) {
         throw new Error("No response body from server.");
       }
@@ -96,12 +98,14 @@ export default function HomePage() {
         done = doneReading;
         if (value) {
           accumulated += decoder.decode(value, { stream: true });
+          // update UI progressively
           setResult(accumulated);
         }
       }
 
-      // final decode (just in case)
-      setResult((prev) => prev + decoder.decode());
+      // final flush
+      accumulated += decoder.decode();
+      setResult(accumulated);
       setTimeout(() => resultRef.current?.scrollIntoView({ behavior: "smooth" }), 150);
     } catch (err) {
       const msg = err?.message ?? "Unknown error. Try again.";
@@ -115,60 +119,55 @@ export default function HomePage() {
   const { words, minutes } = getStats(result);
 
   return (
-    <main style={{ minHeight: "100vh", fontFamily: "Inter, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial" }}>
-      <div style={{ maxWidth: 920, margin: "30px auto", padding: "20px" }}>
-        <header style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
-          <div>
-            <h1 style={{ margin: 0, fontSize: 28, fontWeight: 800 }}>📝 SynapseWrite</h1>
-            <p style={{ margin: "6px 0 0", color: "#6b7280" }}>Your AI writing co-pilot — craft polished articles in seconds.</p>
+    <main className="min-h-screen py-12">
+      <div className="max-w-3xl mx-auto px-4">
+        {/* Header */}
+        <header className="flex items-start justify-between mb-8">
+          <div className="flex items-center gap-4">
+            {/* Small SVG logo */}
+            <div className="flex-none">
+              <svg width="44" height="44" viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg" className="rounded-full bg-white shadow-sm">
+                <rect width="48" height="48" rx="12" fill="#2563EB" />
+                <path d="M14 28c0-6 6-10 10-10s10 4 10 10" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"/>
+                <circle cx="24" cy="18" r="1.8" fill="white" />
+              </svg>
+            </div>
+
+            <div>
+              <h1 className="text-2xl md:text-3xl font-extrabold leading-tight">SynapseWrite</h1>
+              <p className="text-sm text-slate-500 mt-1">Your AI writing co-pilot — generate polished blog articles in seconds.</p>
+            </div>
           </div>
 
-          <div style={{ textAlign: "right" }}>
-            <a href="https://synapsewrite.ai" target="_blank" rel="noreferrer" style={{ color: "#6b7280", fontSize: 13 }}>synapsewrite.ai</a>
-            <div style={{ fontSize: 12, color: "#9ca3af", marginTop: 6 }}>Beta</div>
+          <div className="text-right">
+            <a href="https://synapsewrite.ai" target="_blank" rel="noreferrer" className="text-sm text-slate-500 hover:underline">synapsewrite.ai</a>
+            <div className="mt-2 text-xs text-slate-400">Beta</div>
           </div>
         </header>
 
         {/* Input card */}
-        <section style={{ background: "#fff", border: "1px solid #e6e6e6", borderRadius: 14, padding: 20, boxShadow: "0 4px 20px rgba(15,23,42,0.03)" }}>
-          <label style={{ display: "block", fontSize: 13, color: "#374151", marginBottom: 8 }}>Article topic</label>
-          <div style={{ display: "flex", gap: 12, alignItems: "flex-start" }}>
+        <section className="bg-white border border-slate-100 rounded-2xl p-6 shadow-sm">
+          <label className="block text-sm font-medium text-slate-700 mb-3">Article topic</label>
+
+          <div className="flex gap-4">
             <input
               value={topic}
               onChange={(e) => setTopic(e.target.value)}
               placeholder='e.g., "Top AI tools in 2025 — impact, use cases, examples"'
-              style={{
-                flex: 1,
-                padding: "12px 14px",
-                borderRadius: 10,
-                border: "1px solid #e5e7eb",
-                outline: "none",
-                fontSize: 15,
-              }}
+              className="flex-1 px-4 py-3 rounded-lg border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-300 transition"
             />
 
-            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            <div className="flex flex-col gap-2">
               <button
                 onClick={() => generateArticle(topic)}
                 disabled={loading}
-                style={{
-                  display: "inline-flex",
-                  alignItems: "center",
-                  gap: 10,
-                  padding: "10px 14px",
-                  borderRadius: 10,
-                  border: "none",
-                  color: "#fff",
-                  background: loading ? "#93c5fd" : "#2563eb",
-                  cursor: loading ? "not-allowed" : "pointer",
-                  fontWeight: 600,
-                }}
+                className={`inline-flex items-center gap-2 px-4 py-2 rounded-lg font-semibold text-white ${loading ? "bg-indigo-300 cursor-not-allowed" : "bg-indigo-600 hover:bg-indigo-700"}`}
               >
                 {loading ? (
                   <>
-                    <svg style={{ width: 18, height: 18 }} className="spin" viewBox="0 0 24 24" fill="none">
-                      <circle cx="12" cy="12" r="10" stroke="rgba(255,255,255,0.35)" strokeWidth="4"></circle>
-                      <path d="M4 12a8 8 0 018-8v8z" fill="white"></path>
+                    <svg className="animate-spin h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"></path>
                     </svg>
                     Generating...
                   </>
@@ -178,12 +177,8 @@ export default function HomePage() {
               </button>
 
               <button
-                onClick={() => {
-                  setTopic("");
-                  setResult("");
-                  setError(null);
-                }}
-                style={{ background: "transparent", border: "none", color: "#6b7280", fontSize: 13, cursor: "pointer" }}
+                onClick={() => { setTopic(""); setResult(""); setError(null); }}
+                className="text-xs text-slate-500 hover:text-slate-700"
               >
                 Clear
               </button>
@@ -191,57 +186,71 @@ export default function HomePage() {
           </div>
 
           {error && (
-            <div style={{ marginTop: 12, color: "#b91c1c", background: "#fff1f2", border: "1px solid #fee2e2", padding: 12, borderRadius: 8 }}>
+            <div className="mt-4 text-sm text-red-700 bg-red-50 border border-red-100 p-3 rounded-md">
               ⚠️ {error}
             </div>
           )}
         </section>
 
-        {/* Result header + actions */}
-        <section style={{ marginTop: 18 }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
-            <div style={{ color: "#6b7280", fontSize: 13 }}>
-              <strong style={{ color: "#111827" }}>{words}</strong> words • <strong style={{ color: "#111827" }}>{minutes}</strong> min read
+        {/* Result & controls */}
+        <section className="mt-6">
+          <div className="flex items-center justify-between mb-3">
+            <div className="text-sm text-slate-600">
+              <span className="font-medium text-slate-800">{words}</span> words • <span className="font-medium text-slate-800">{minutes}</span> min read
             </div>
 
-            <div style={{ display: "flex", gap: 8 }}>
-              <button onClick={() => result && copyToClipboard(result)} disabled={!result} style={{ padding: "8px 10px", borderRadius: 8, border: "1px solid #e6e6e6", background: "#fff", cursor: result ? "pointer" : "not-allowed" }}>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => result && copyToClipboard(result)}
+                disabled={!result}
+                className="px-3 py-1 bg-white border border-slate-200 rounded-md text-sm hover:shadow-sm disabled:opacity-50"
+              >
                 Copy
               </button>
-              <button onClick={() => result && downloadArticle(topic || "article", result)} disabled={!result} style={{ padding: "8px 10px", borderRadius: 8, border: "1px solid #e6e6e6", background: "#fff", cursor: result ? "pointer" : "not-allowed" }}>
+
+              <button
+                onClick={() => result && downloadArticle(topic || "article", result)}
+                disabled={!result}
+                className="px-3 py-1 bg-white border border-slate-200 rounded-md text-sm hover:shadow-sm disabled:opacity-50"
+              >
                 Download
               </button>
-              <button onClick={() => generateArticle(topic)} disabled={loading || !topic.trim()} style={{ padding: "8px 10px", borderRadius: 8, border: "1px solid #e6e6e6", background: "#fff", cursor: loading || !topic.trim() ? "not-allowed" : "pointer" }}>
+
+              <button
+                onClick={() => generateArticle(topic)}
+                disabled={loading || !topic.trim()}
+                className="px-3 py-1 bg-white border border-slate-200 rounded-md text-sm hover:shadow-sm disabled:opacity-50"
+              >
                 Regenerate
               </button>
             </div>
           </div>
 
-          <div ref={resultRef} style={{ background: "#fff", border: "1px solid #e6e6e6", borderRadius: 12, padding: 20, maxHeight: "62vh", overflowY: "auto", boxShadow: "0 6px 24px rgba(15,23,42,0.03)" }}>
+          <div ref={resultRef} className="bg-white border border-slate-100 rounded-xl p-6 shadow-sm max-h-[60vh] overflow-y-auto prose prose-sm sm:prose lg:prose-base">
             {!result && !loading && (
-              <div style={{ color: "#6b7280" }}>
-                Your generated article will appear here. Try a topic like <span style={{ color: "#2563eb" }}>"Top AI tools in 2025"</span>.
+              <div className="text-slate-500">
+                Your generated article will appear here. Try a topic like <span className="text-indigo-600">"Top AI tools in 2025"</span>.
               </div>
             )}
 
             {loading && (
-              <div style={{ opacity: 0.9 }}>
-                <div style={{ height: 16, background: "#f3f4f6", borderRadius: 6, marginBottom: 8 }} />
-                <div style={{ height: 12, background: "#f3f4f6", borderRadius: 6, marginBottom: 6 }} />
-                <div style={{ height: 12, background: "#f3f4f6", borderRadius: 6, marginBottom: 6 }} />
-                <div style={{ height: 12, background: "#f3f4f6", borderRadius: 6, width: "85%" }} />
+              <div className="space-y-2 animate-pulse">
+                <div className="h-5 bg-slate-100 rounded w-3/4" />
+                <div className="h-4 bg-slate-100 rounded w-5/6" />
+                <div className="h-4 bg-slate-100 rounded w-full" />
+                <div className="h-4 bg-slate-100 rounded w-full" />
               </div>
             )}
 
             {result && !loading && (
-              <article style={{ whiteSpace: "pre-wrap", color: "#111827", lineHeight: 1.6 }}>
+              <article style={{ whiteSpace: "pre-wrap" }}>
                 {result}
               </article>
             )}
           </div>
         </section>
 
-        <footer style={{ marginTop: 18, color: "#9ca3af", fontSize: 13 }}>
+        <footer className="mt-6 text-xs text-slate-400">
           Generated content may require editing. SynapseWrite does not store your data permanently unless you enable save.
         </footer>
       </div>
