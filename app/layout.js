@@ -1,7 +1,15 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+// app/layout.js
+import "./globals.css";
 
-body {
-  font-family: sans-serif;
+export const metadata = {
+  title: "SynapseWrite",
+  description: "AI-powered writing co-pilot",
+};
+
+export default function RootLayout({ children }) {
+  return (
+    <html lang="en">
+      <body>{children}</body>
+    </html>
+  );
 }
