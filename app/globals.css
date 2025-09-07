@@ -1,9 +1,119 @@
-/* app/globals.css */
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
-
-body {
-  font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue",
-    Arial;
+/* globals.css - place at top of your existing file or replace it */
+/* Font & base ---------------------------------------------- */
+:root{
+  --brand-primary: #2563EB; /* indigo */
+  --brand-accent:  #06B6D4; /* teal */
+  --brand-accent-2: #8B5CF6; /* purple accent */
+  --bg: #FFFFFF;
+  --muted: #6B7280;
+  --text-dark: #0F172A;
+  --card-bg: #FFFFFF;
+  --radius: 12px;
+  --glass: rgba(15,23,42,0.03);
 }
+
+* { box-sizing: border-box; }
+html,body,#root { height: 100%; }
+body {
+  margin: 0;
+  font-family: "Poppins", Inter, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial;
+  color: var(--text-dark);
+  background: linear-gradient(180deg, #ffffff 0%, #fbfdff 100%);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Header ---------------------------------------------- */
+.site-header {
+  background: var(--bg);
+  border-bottom: 1px solid var(--glass);
+  position: sticky;
+  top: 0;
+  z-index: 60;
+}
+.container {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 16px 20px;
+}
+.header-inner {
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+}
+.brand {
+  display:flex;
+  align-items:center;
+  gap:14px;
+}
+.brand-glyph { flex: none; border-radius:8px; box-shadow: 0 6px 18px rgba(2,6,23,0.04); }
+.brand-text { display:flex; flex-direction:column; line-height: 1; }
+.brand-synapse { font-size: 18px; font-weight: 700; color: var(--text-dark); }
+.brand-write { font-size: 18px; font-weight: 700; color: var(--brand-accent); margin-left: 4px; }
+.brand-tagline { font-size: 12px; color: var(--muted); margin-top:6px; font-weight:500; }
+
+/* header-right */
+.header-right { display:flex; align-items:center; gap:12px; }
+.site-link { color: var(--muted); font-size:13px; text-decoration:none; }
+.badge { font-size:11px; color: #9CA3AF; }
+
+/* Card / Inputs / Buttons ---------------------------------------------- */
+.card {
+  background: var(--card-bg);
+  border: 1px solid var(--glass);
+  border-radius: var(--radius);
+  padding: 18px;
+  box-shadow: 0 6px 24px rgba(2,6,23,0.03);
+}
+
+.input {
+  width:100%;
+  padding: 12px 14px;
+  border-radius: 10px;
+  border: 1px solid #E6EEF8;
+  outline: none;
+  font-size: 15px;
+}
+
+.btn {
+  display:inline-flex;
+  align-items:center;
+  gap:8px;
+  padding:9px 14px;
+  border-radius: 10px;
+  border: none;
+  font-weight: 600;
+  cursor: pointer;
+  transition: transform .12s ease, box-shadow .12s ease;
+}
+.btn:active { transform: translateY(1px); }
+.btn-primary {
+  background: linear-gradient(180deg, var(--brand-primary), #1E4ED8);
+  color: #fff;
+  box-shadow: 0 6px 20px rgba(37,99,235,0.18);
+}
+.btn-ghost {
+  background: #fff;
+  border: 1px solid #E6EEF8;
+  color: var(--text-dark);
+}
+
+/* Result card */
+.result-card {
+  background: var(--card-bg);
+  border-radius: 12px;
+  border: 1px solid var(--glass);
+  padding: 18px;
+  box-shadow: 0 8px 30px rgba(2,6,23,0.03);
+  max-height: 60vh;
+  overflow-y: auto;
+}
+
+/* small utilities */
+.text-muted { color: var(--muted); }
+.small { font-size: 13px; }
+.center { text-align:center; }
+.container-narrow { max-width: 920px; margin: 0 auto; padding: 28px 20px; }
+
+/* Make sure pre-wrap style available for result rendering */
+.pre-wrap { white-space: pre-wrap; word-break: break-word; }
