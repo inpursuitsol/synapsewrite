@@ -1,27 +1,36 @@
-// server.js
-// Run backend with: node server.js
+// Export to WordPress route
+// Needs: npm install express node-fetch
 const express = require('express');
+const fetch = require('node-fetch');
 const app = express();
 app.use(express.json());
 
-app.post('/api/generate', async (req, res) => {
-  res.setHeader('Content-Type', 'text/plain; charset=utf-8');
-  res.setHeader('Transfer-Encoding', 'chunked');
-  res.flushHeaders();
+const WP_SITE = "https://example.com"; // your WordPress site
+const WP_USER = "yourusername";        // WordPress username
+const WP_APP_PASS = "abcd efgh ijkl";  // WordPress app password
 
-  // Fake paragraphs (simulating AI stream)
-  const paras = [
-    'Title: The future of remote work\n\n',
-    'Remote work has transformed how companies operate. ',
-    'Employees value flexibility and employers can tap global talent. ',
-    '... (more paragraphs) ...'
-  ];
+app.post('/exportToWP', async (req, res) => {
+  const { title, content } = req.body;
+  try {
+    const response = await fetch(`${WP_SITE}/wp-json/wp/v2/posts`, {
+      method: 'POST',
+      headers: {
+        "Authorization": "Basic " + Buffer.from(WP_USER + ":" + WP_APP_PASS).toString("base64"),
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        title,
+        content,       // must be HTML, not raw Markdown
+        status: "draft"
+      })
+    });
 
-  for (const p of paras) {
-    res.write(p);                 // send piece
-    await new Promise(r => setTimeout(r, 500)); // wait half a sec
+    const data = await response.json();
+    if (!response.ok) throw new Error(JSON.stringify(data));
+    res.json({ success: true, postUrl: `${WP_SITE}/?p=${data.id}` });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
   }
-  res.end();
 });
 
-app.listen(3000, () => console.log('✅ Server running at http://localhost:3000'));
+app.listen(4000, () => console.log("✅ Export-to-WP API running on http://localhost:4000"));
