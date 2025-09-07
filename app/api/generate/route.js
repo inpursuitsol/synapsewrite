@@ -2,55 +2,58 @@
 import OpenAI from "openai";
 
 /**
- * Generalized RAG-enabled SEO article generation endpoint.
+ * Generalized, region-aware RAG + SEO generation route.
  *
- * Input JSON (POST):
+ * POST body: { topic: string, region?: "in"|"us"|..., language?: "en", forceVerify?: boolean }
+ *
+ * Response JSON:
  * {
- *   "topic": "Best iPhones available in India",
- *   "region": "in"           // optional, ISO country code (e.g., "in", "us", "gb")
+ *   title, meta, content, faq, sources: [{title,link,snippet}], verification: { trustedCount, note },
+ *   needsReview: bool, notes: string, region: string, retrieved: bool
  * }
  *
- * Output JSON:
- * {
- *   title: "...",
- *   meta: "...",
- *   content: "...",         // markdown/plain text
- *   faq: [{q:"", a:""}],
- *   sources: [{title,link,snippet}],
- *   verification: {trustedCount: N, note: "..."},
- *   needsReview: boolean,
- *   notes: "..."
- * }
- *
- * Env required:
- * - OPENAI_API_KEY (required)
- * - SERPAPI_KEY (optional) — enables live search retrieval (recommended)
+ * Env:
+ *  - OPENAI_API_KEY (required)
+ *  - SERPAPI_KEY (optional but recommended for live verification)
  */
 
-const TRUSTED_DOMAINS = [
+const GLOBAL_TRUSTED = [
   "apple.com",
-  "flipkart.com",
-  "amazon.in",
-  "amazon.com",
+  "amazon.",
   "gsmarena.com",
-  "91mobiles.com",
-  "ndtv.com",
   "theverge.com",
   "techradar.com",
   "wired.com",
   "bbc.com",
+  "cnn.com",
 ];
 
-function isTrustedLink(link = "") {
+const REGION_TRUSTED_MAP = {
+  in: ["flipkart.com", "91mobiles.com", "ndtv.com"],
+  us: ["bestbuy.com", "cnet.com"],
+  uk: ["argos.co.uk", "techadvisor.co.uk"],
+  ca: ["bestbuy.ca"],
+  de: ["chip.de"],
+  fr: ["lesnumeriques.com"],
+  sg: ["shoppe", "lazada"], // best-effort, not exhaustive
+};
+
+function getTrustedDomainsForRegion(region = "us") {
+  const regionList = REGION_TRUSTED_MAP[region] || [];
+  return Array.from(new Set([...GLOBAL_TRUSTED, ...regionList]));
+}
+
+function isTrustedLink(link = "", region = "us") {
   if (!link) return false;
-  const l = link.toLowerCase();
-  return TRUSTED_DOMAINS.some((d) => l.includes(d));
+  const l = (link || "").toLowerCase();
+  const trusted = getTrustedDomainsForRegion(region);
+  return trusted.some((d) => l.includes(d));
 }
 
 function safeJSONParse(s) {
   try {
     return JSON.parse(s);
-  } catch (e) {
+  } catch {
     return null;
   }
 }
@@ -61,13 +64,13 @@ async function serpApiSearch(query, serpKey, gl = "us", num = 6) {
     gl
   )}&num=${num}&api_key=${encodeURIComponent(serpKey)}`;
   try {
-    const res = await fetch(url, { method: "GET" });
+    const res = await fetch(url);
     if (!res.ok) {
       console.warn("SerpAPI error", res.status, await res.text().catch(() => ""));
       return [];
     }
     const j = await res.json();
-    const results = (j.organic_results || []).map((r) => ({
+    const hits = (j.organic_results || []).map((r) => ({
       title: r.title || r.link || r.displayed_link || "",
       link: r.link || r.displayed_link || "",
       snippet: r.snippet || (r.rich_snippet?.top?.extensions || []).join(" ") || "",
@@ -75,24 +78,25 @@ async function serpApiSearch(query, serpKey, gl = "us", num = 6) {
     // dedupe by link
     const uniq = [];
     const seen = new Set();
-    for (const r of results) {
-      if (!r.link) continue;
-      if (seen.has(r.link)) continue;
-      seen.add(r.link);
-      uniq.push(r);
+    for (const h of hits) {
+      if (!h.link) continue;
+      if (seen.has(h.link)) continue;
+      seen.add(h.link);
+      uniq.push(h);
     }
     return uniq;
   } catch (err) {
-    console.warn("SerpAPI fetch failed:", err?.message ?? err);
+    console.warn("SerpAPI request failed:", err?.message ?? err);
     return [];
   }
 }
 
-function shouldUseRetrieval(topic) {
+function shouldUseRetrieval(topic = "", forceVerify = false) {
+  if (forceVerify) return true;
   if (!topic) return false;
   const t = topic.toLowerCase();
-  // keywords that suggest freshness/facts needed
-  const retrievalKeywords = [
+  // keywords suggesting recency or factual verification
+  const keywords = [
     "best",
     "top",
     "latest",
@@ -103,27 +107,37 @@ function shouldUseRetrieval(topic) {
     "available",
     "compare",
     "vs ",
-    "in ",
     "202",
     "2025",
     "2024",
+    "how many",
+    "how to",
   ];
-  return retrievalKeywords.some((k) => t.includes(k));
+  return keywords.some((k) => t.includes(k));
+}
+
+function isSensitiveTopic(topic = "") {
+  if (!topic) return false;
+  const t = topic.toLowerCase();
+  const sensitive = ["health", "medical", "legal", "law", "finance", "stock", "investment", "election", "vote"];
+  return sensitive.some((k) => t.includes(k));
 }
 
 export async function POST(req) {
   try {
     const body = await req.json().catch(() => ({}));
     const topic = (body?.topic || "").toString().trim();
+    const forceVerify = Boolean(body?.forceVerify);
+    let region = (body?.region || "").toString().trim().toLowerCase();
+    const language = (body?.language || "").toString().trim().toLowerCase() || "en";
+
     if (!topic) {
-      return new Response(JSON.stringify({ error: "Missing topic" }), { status: 400, headers: { "Content-Type": "application/json" } });
+      return new Response(JSON.stringify({ error: "Missing 'topic' in request body." }), { status: 400, headers: { "Content-Type": "application/json" } });
     }
 
-    // Determine region: request body -> Accept-Language header -> default 'us'
-    let region = (body?.region || "").toString().trim().toLowerCase();
+    // fallback region detection from accept-language header
     if (!region) {
       const accept = (req.headers.get("accept-language") || "").split(",")[0] || "";
-      // try to extract country from accept-language like en-IN -> in
       const parts = accept.split("-");
       if (parts.length > 1) region = parts[1].toLowerCase();
     }
@@ -135,38 +149,33 @@ export async function POST(req) {
     }
     const serpKey = process.env.SERPAPI_KEY || "";
 
+    const useRetrieval = shouldUseRetrieval(topic, forceVerify);
     const openai = new OpenAI({ apiKey: openaiKey });
 
-    // Step A: create SEO outline (title, meta, headings, 3-5 FAQ prompts)
+    // 1) Ask the model for an SEO outline (title/meta/outline/faq)
     const outlinePrompt = [
       {
         role: "system",
         content:
-          "You are an expert SEO copywriter that outputs structured SEO-ready metadata and outline. " +
-          "Return a JSON object ONLY with keys: title, meta, outline (array of heading strings), faq (array of {q,a} pairs - short answers). " +
-          "Be concise and use the topic as given.",
+          "You are an expert SEO copywriter. Output ONLY a JSON object with keys: title, meta (single sentence <=160 chars), outline (array of strings for H2 headings), and faq (array of objects {q,a}).",
       },
-      { role: "user", content: `Topic: ${topic}\n\nReturn the JSON object.` },
+      { role: "user", content: `Topic: ${topic}\nRegion: ${region}\nLanguage: ${language}\nReturn the JSON object.` },
     ];
 
     const outlineResp = await openai.chat.completions.create({
       model: "gpt-4o-mini",
       messages: outlinePrompt,
-      max_tokens: 600,
+      max_tokens: 700,
       temperature: 0.0,
     });
 
     const outlineRaw = outlineResp?.choices?.[0]?.message?.content ?? outlineResp?.choices?.[0]?.text ?? "";
     let outline = safeJSONParse(outlineRaw.trim());
     if (!outline) {
-      // try to extract JSON block
       const s = outlineRaw.indexOf("{");
       const e = outlineRaw.lastIndexOf("}");
-      if (s !== -1 && e !== -1 && e > s) {
-        outline = safeJSONParse(outlineRaw.slice(s, e + 1));
-      }
+      if (s !== -1 && e !== -1 && e > s) outline = safeJSONParse(outlineRaw.slice(s, e + 1));
     }
-    // If still no outline, provide a fallback
     if (!outline) {
       outline = {
         title: topic,
@@ -176,126 +185,104 @@ export async function POST(req) {
       };
     }
 
-    // Decide whether to retrieve live web snippets
-    const doRetrieve = shouldUseRetrieval(topic);
+    // 2) If retrieval is needed, fetch regional snippets
     let sources = [];
     let verification = { trustedCount: 0, note: "" };
+    if (useRetrieval) {
+      if (!serpKey) {
+        verification.note = "Retrieval needed but SERPAPI_KEY is not set. Enable SERPAPI_KEY for live verification.";
+      } else {
+        // Focused query: try trusted sites first then general query
+        const trustedCandidates = getTrustedDomainsForRegion(region)
+          .slice(0, 6)
+          .map((d) => `site:${d}`)
+          .join(" OR ");
 
-    if (doRetrieve && serpKey) {
-      // Build a focused query that mixes site hints and general query
-      // We run two searches: focused (trusted sites) and general
-      const focusedQuery = `${topic} site:amazon.${region} OR site:amazon.in OR site:flipkart.com OR site:apple.com OR site:gsmarena.com OR site:91mobiles.com`;
-      let hits = await serpApiSearch(focusedQuery, serpKey, region, 6).catch(() => []);
-      if (!hits || hits.length === 0) {
-        hits = await serpApiSearch(topic, serpKey, region, 8).catch(() => []);
+        let hits = [];
+        try {
+          const focusedQuery = `${topic} ${trustedCandidates ? ` ${trustedCandidates}` : ""}`;
+          hits = await serpApiSearch(focusedQuery.trim(), serpKey, region, 8);
+          if (!hits || hits.length === 0) {
+            hits = await serpApiSearch(topic, serpKey, region, 10);
+          }
+        } catch (err) {
+          console.warn("Search error:", err?.message ?? err);
+          hits = [];
+        }
+        sources = (hits || []).slice(0, 12);
+        const trustedCount = sources.filter((s) => isTrustedLink(s.link, region)).length;
+        verification.trustedCount = trustedCount;
+        verification.note = trustedCount > 0 ? "Trusted sources found." : "No trusted sources found for this topic in the selected region.";
       }
-      sources = hits.slice(0, 12);
-
-      // Count trusted hits
-      const trustedCount = sources.filter((s) => isTrustedLink(s.link)).length;
-      verification.trustedCount = trustedCount;
-      verification.note = trustedCount > 0 ? "Trusted sources found." : "No trusted sources found for this query.";
-    } else if (doRetrieve && !serpKey) {
-      verification.trustedCount = 0;
-      verification.note = "Retrieval was requested but SERPAPI_KEY is not set. Set SERPAPI_KEY to enable live verification.";
     } else {
-      verification.trustedCount = 0;
       verification.note = "Retrieval not required for this topic.";
     }
 
-    // Step B: Compose final article
-    // If we have sources, create a strict context instructing the model to use only those snippets
+    // 3) Compose final article
     let finalContent = "";
     let needsReview = false;
 
     if (sources && sources.length > 0) {
-      // build snippets context (prioritize trusted links)
-      const trusted = sources.filter((s) => isTrustedLink(s.link));
-      const chosen = trusted.length ? trusted.slice(0, 6) : sources.slice(0, 6);
-
-      const contextText = chosen
-        .map((s, i) => `${i + 1}. ${s.title}\n${s.link}\n${s.snippet || ""}`)
-        .join("\n\n");
+      // build context prioritized by trusted domain hits
+      const trustedHits = sources.filter((s) => isTrustedLink(s.link, region));
+      const chosen = trustedHits.length ? trustedHits.slice(0, 6) : sources.slice(0, 6);
+      const context = chosen.map((s, i) => `${i + 1}. ${s.title}\n${s.link}\n${s.snippet || ""}`).join("\n\n");
 
       const composeSys = `
-You are a factual content writer. You have been given ONLY the following web snippets and links as the source of truth.
-Use ONLY these snippets to write the article. If a fact (release date, price, availability, or a claim) is not supported by the provided snippets, explicitly write "I could not verify this" for that fact.
-Output a final SEO-ready article matching this outline: include the title, a short meta description (single paragraph), and the article body with the headings given in the outline. Include a "Sources" section listing the URLs used.
+You are an evidence-driven content writer. You have been provided ONLY the following web snippets as the source of truth.
+Use ONLY these snippets for factual claims (release dates, prices, availability). If a fact is not present, write "I could not verify this".
+Write an SEO-ready article using the provided outline. Include a "Sources" section listing the used URLs.
 `;
 
       const composeUser = [
         `Topic: ${topic}`,
+        `Region: ${region}`,
+        `SEO outline: ${JSON.stringify(outline)}`,
         "",
-        `SEO outline (title/meta/outline/faq): ${JSON.stringify(outline)}`,
+        "Use these snippets for verification (do not use information outside them):",
+        context,
         "",
-        "Verified source snippets (use these only):",
-        contextText,
-        "",
-        "Requirements:",
-        "- Start with the SEO title (use outline.title).",
-        "- Provide a one-sentence meta description (max 160 chars).",
-        "- Follow the outline headings and produce ~700-1500 words depending on the topic complexity.",
-        "- Add an FAQ section using outline.faq (short answers).",
-        "- End with Sources (list URLs).",
+        "Requirements:\n- Output the article (Markdown okay).\n- Start with the SEO title and a one-line meta description.\n- Follow the outline headings.\n- Add FAQ section from outline.faq.\n- End with Sources listing the URLs used.",
       ].join("\n");
 
       const composeResp = await openai.chat.completions.create({
         model: "gpt-4o-mini",
-        messages: [
-          { role: "system", content: composeSys },
-          { role: "user", content: composeUser },
-        ],
+        messages: [{ role: "system", content: composeSys }, { role: "user", content: composeUser }],
         max_tokens: 2000,
         temperature: 0.0,
       });
 
       finalContent = composeResp?.choices?.[0]?.message?.content ?? composeResp?.choices?.[0]?.text ?? "";
-      // If trustedCount is zero, we may want to mark for review
-      needsReview = verification.trustedCount === 0;
+      needsReview = verification.trustedCount === 0 || (isSensitiveTopic(topic) && verification.trustedCount < 1);
     } else {
-      // No sources (either retrieval disabled or no hits)
-      // Generate a cautious SEO article but mark needsReview true if retrieval was suggested but no sources
+      // No sources available: create a cautious SEO article but mark review if retrieval was expected
       const fallbackSys = `
-You are an SEO content writer. Produce a cautious, well-structured SEO article for the given outline.
-If the topic likely depends on fresh facts or local availability and you are not certain, say "I could not verify this" for uncertain facts.
+You are a careful SEO writer. Produce a cautious article from the outline given. For time-sensitive facts that need verification, say "I could not verify this".
 `;
-
       const fallbackUser = [
         `Topic: ${topic}`,
+        `SEO outline: ${JSON.stringify(outline)}`,
         "",
-        `SEO outline (title/meta/outline/faq): ${JSON.stringify(outline)}`,
-        "",
-        "Requirements:",
-        "- Use the outline headings.",
-        "- Provide a one-sentence meta (160 chars).",
-        "- Add FAQ answers from the outline.",
-        "- If a claim is time-sensitive or requires live verification, write 'I could not verify this'.",
+        "Requirements:\n- Provide title & meta.\n- Follow outline headings.\n- For claims that require live verification, write 'I could not verify this'.",
       ].join("\n");
 
       const fallbackResp = await openai.chat.completions.create({
         model: "gpt-4o-mini",
-        messages: [
-          { role: "system", content: fallbackSys },
-          { role: "user", content: fallbackUser },
-        ],
+        messages: [{ role: "system", content: fallbackSys }, { role: "user", content: fallbackUser }],
         max_tokens: 1600,
         temperature: 0.0,
       });
 
       finalContent = fallbackResp?.choices?.[0]?.message?.content ?? fallbackResp?.choices?.[0]?.text ?? "";
-      needsReview = doRetrieve && !serpKey; // retrieval needed but not possible
+      needsReview = useRetrieval && !serpKey; // retrieval requested but not possible OR lack of sources
+      if (isSensitiveTopic(topic)) needsReview = true;
     }
 
-    // Build FAQ array from outline if present (ensure it's an array of objects)
     const faq = Array.isArray(outline.faq)
-      ? outline.faq.map((f) => {
-          if (typeof f === "string") return { q: f, a: "" };
-          if (f && typeof f === "object" && f.q) return { q: f.q, a: f.a || "" };
-          return { q: String(f), a: "" };
-        })
+      ? outline.faq.map((f) => (typeof f === "string" ? { q: f, a: "" } : { q: f.q || String(f), a: f.a || "" }))
       : [];
 
-    const responsePayload = {
+    const payload = {
       title: outline.title || topic,
       meta: outline.meta || "",
       content: finalContent,
@@ -303,22 +290,14 @@ If the topic likely depends on fresh facts or local availability and you are not
       sources,
       verification,
       needsReview,
-      notes: verification.note || "",
+      notes: verification.note,
       region,
-      retrieved: doRetrieve && Boolean(serpKey),
+      retrieved: useRetrieval && Boolean(serpKey),
     };
 
-    return new Response(JSON.stringify(responsePayload), {
-      status: 200,
-      headers: { "Content-Type": "application/json" },
-    });
+    return new Response(JSON.stringify(payload), { status: 200, headers: { "Content-Type": "application/json" } });
   } catch (err) {
     console.error("generate route error:", err);
-    return new Response(
-      JSON.stringify({
-        error: err?.message ?? String(err),
-      }),
-      { status: 500, headers: { "Content-Type": "application/json" } }
-    );
+    return new Response(JSON.stringify({ error: err?.message ?? String(err) }), { status: 500, headers: { "Content-Type": "application/json" } });
   }
 }
