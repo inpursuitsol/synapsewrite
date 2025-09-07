@@ -3,12 +3,7 @@
 import { useState, useRef } from "react";
 
 /**
- * Polished UI for SynapseWrite:
- * - Tailwind-powered layout
- * - Smooth loading animation
- * - Tagline, copy & download actions
- * - Scrollable result box with word count + read time
- * - Friendly errors
+ * Polished UI for SynapseWrite (updated to match new header + font)
  */
 
 export default function HomePage() {
@@ -18,15 +13,13 @@ export default function HomePage() {
   const [error, setError] = useState(null);
   const resultRef = useRef(null);
 
-  // Utility: compute words & estimated read time
   const getStats = (text) => {
     if (!text) return { words: 0, minutes: 0 };
     const words = text.trim().split(/\s+/).filter(Boolean).length;
-    const minutes = Math.max(1, Math.round(words / 200)); // ~200 WPM
+    const minutes = Math.max(1, Math.round(words / 200));
     return { words, minutes };
   };
 
-  // Copy text to clipboard
   const copyToClipboard = async (text) => {
     try {
       await navigator.clipboard.writeText(text);
@@ -36,7 +29,6 @@ export default function HomePage() {
     }
   };
 
-  // Download as markdown file
   const downloadArticle = (title = "article", content = "") => {
     const blob = new Blob([`# ${title}\n\n${content}`], { type: "text/markdown" });
     const url = URL.createObjectURL(blob);
@@ -49,14 +41,12 @@ export default function HomePage() {
     URL.revokeObjectURL(url);
   };
 
-  // Main API call
   async function generateArticle(topic) {
     if (!topic || !topic.trim()) {
       setError("Please enter a topic to generate an article.");
       return;
     }
 
-    // Analytics (Plausible) — will no-op if not present
     if (typeof window !== "undefined" && window.plausible) {
       window.plausible("Generate Article");
     }
@@ -87,7 +77,6 @@ export default function HomePage() {
       }
 
       setResult(data.content);
-      // scroll result into view smoothly
       setTimeout(() => resultRef.current?.scrollIntoView({ behavior: "smooth" }), 150);
     } catch (err) {
       const msg = err?.message ?? "Unknown error. Try again.";
@@ -101,58 +90,29 @@ export default function HomePage() {
   const { words, minutes } = getStats(result);
 
   return (
-    <main className="min-h-screen bg-gradient-to-b from-white to-gray-50 p-6 flex items-start justify-center">
-      <div className="w-full max-w-3xl">
-        {/* Removed duplicate h1 — only tagline remains */}
-        <header className="mb-8">
-          <p className="text-sm text-gray-600 mt-1">
-            Your AI writing co-pilot — generate polished blog articles in seconds.
-          </p>
-        </header>
-
-        {/* Input Card */}
-        <section className="bg-white border border-gray-200 rounded-2xl p-6 shadow-sm">
-          <label className="block text-sm font-medium text-gray-700 mb-2">Article topic</label>
-          <div className="flex gap-3 items-start">
+    <div>
+      <div className="container-narrow">
+        {/* Input card */}
+        <section className="card" style={{ marginTop: 28 }}>
+          <label className="small text-muted" style={{ display: "block", marginBottom: 8 }}>Article topic</label>
+          <div style={{ display: "flex", gap: 12, alignItems: "flex-start" }}>
             <input
+              className="input"
               value={topic}
               onChange={(e) => setTopic(e.target.value)}
-              placeholder="e.g., Top AI tools in 2025 — impact, use cases, and examples"
-              className="flex-1 p-3 rounded-lg border border-gray-200 focus:outline-none focus:ring-2 focus:ring-indigo-300 transition"
+              placeholder='e.g., "Top AI tools in 2025 — impact, use cases, examples"'
             />
 
-            <div className="flex flex-col gap-2">
-              <button
-                onClick={() => generateArticle(topic)}
-                disabled={loading}
-                className={`inline-flex items-center gap-2 px-4 py-2 rounded-lg font-medium shadow-sm text-white ${
-                  loading ? "bg-indigo-300 cursor-not-allowed" : "bg-indigo-600 hover:bg-indigo-700"
-                }`}
-              >
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              <button onClick={() => generateArticle(topic)} disabled={loading} className="btn btn-primary">
                 {loading ? (
-                  <>
-                    <svg
-                      className="animate-spin h-5 w-5 text-white"
-                      xmlns="http://www.w3.org/2000/svg"
-                      fill="none"
-                      viewBox="0 0 24 24"
-                    >
-                      <circle
-                        className="opacity-25"
-                        cx="12"
-                        cy="12"
-                        r="10"
-                        stroke="currentColor"
-                        strokeWidth="4"
-                      ></circle>
-                      <path
-                        className="opacity-75"
-                        fill="currentColor"
-                        d="M4 12a8 8 0 018-8v8z"
-                      ></path>
+                  <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
+                    <svg style={{ width: 18, height: 18 }} className="spin" viewBox="0 0 24 24" fill="none">
+                      <circle cx="12" cy="12" r="10" stroke="rgba(255,255,255,0.35)" strokeWidth="4"></circle>
+                      <path d="M4 12a8 8 0 018-8v8z" fill="white"></path>
                     </svg>
                     Generating...
-                  </>
+                  </span>
                 ) : (
                   "Generate"
                 )}
@@ -164,7 +124,7 @@ export default function HomePage() {
                   setResult("");
                   setError(null);
                 }}
-                className="text-xs text-gray-500 hover:text-gray-700"
+                className="btn btn-ghost"
               >
                 Clear
               </button>
@@ -172,81 +132,56 @@ export default function HomePage() {
           </div>
 
           {error && (
-            <div className="mt-4 text-sm text-red-600 bg-red-50 border border-red-100 p-3 rounded">
-              ⚠️ {error}
+            <div style={{ marginTop: 12 }} className="card" >
+              <div style={{ color: "#B91C1C" }}>⚠️ {error}</div>
             </div>
           )}
         </section>
 
-        {/* Result / Controls */}
-        <section className="mt-6">
-          <div className="flex items-center justify-between mb-3">
-            <div className="text-sm text-gray-600">
-              <span className="font-medium">{words}</span> words •{" "}
-              <span className="font-medium">{minutes}</span> min read
+        {/* Result + actions */}
+        <section style={{ marginTop: 18 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+            <div className="small text-muted">
+              <strong style={{ color: "var(--text-dark)" }}>{words}</strong> words • <strong style={{ color: "var(--text-dark)" }}>{minutes}</strong> min read
             </div>
 
-            <div className="flex items-center gap-3">
-              <button
-                onClick={() => result && copyToClipboard(result)}
-                disabled={!result}
-                className="px-3 py-1 bg-white border border-gray-200 rounded-md text-sm hover:shadow-sm disabled:opacity-50"
-              >
+            <div style={{ display: "flex", gap: 8 }}>
+              <button onClick={() => result && copyToClipboard(result)} disabled={!result} className="btn btn-ghost" style={{ padding: "8px 12px" }}>
                 Copy
               </button>
 
-              <button
-                onClick={() => result && downloadArticle(topic || "article", result)}
-                disabled={!result}
-                className="px-3 py-1 bg-white border border-gray-200 rounded-md text-sm hover:shadow-sm disabled:opacity-50"
-              >
+              <button onClick={() => result && downloadArticle(topic || "article", result)} disabled={!result} className="btn btn-ghost" style={{ padding: "8px 12px" }}>
                 Download
               </button>
 
-              <button
-                onClick={() => generateArticle(topic)}
-                disabled={loading || !topic.trim()}
-                className="px-3 py-1 bg-white border border-gray-200 rounded-md text-sm hover:shadow-sm disabled:opacity-50"
-              >
+              <button onClick={() => generateArticle(topic)} disabled={loading || !topic.trim()} className="btn btn-ghost" style={{ padding: "8px 12px" }}>
                 Regenerate
               </button>
             </div>
           </div>
 
-          <div
-            ref={resultRef}
-            className="bg-white border border-gray-200 rounded-xl p-6 shadow-sm max-h-[60vh] overflow-y-auto prose prose-sm sm:prose lg:prose-base"
-          >
+          <div ref={resultRef} className="result-card pre-wrap" style={{ minHeight: 160 }}>
             {!result && !loading && (
-              <div className="text-gray-500">
-                Your generated article will appear here. Try a topic like{" "}
-                <span className="text-indigo-600">"Top AI tools in 2025"</span>.
-              </div>
+              <div className="text-muted">Your generated article will appear here. Try a topic like <span style={{ color: "var(--brand-primary)" }}>"Top AI tools in 2025"</span>.</div>
             )}
 
             {loading && (
-              <div className="animate-pulse space-y-2">
-                <div className="h-6 bg-gray-200 rounded w-3/4" />
-                <div className="h-4 bg-gray-200 rounded w-5/6" />
-                <div className="h-4 bg-gray-200 rounded w-full" />
-                <div className="h-4 bg-gray-200 rounded w-full" />
-                <div className="h-4 bg-gray-200 rounded w-4/5" />
+              <div style={{ opacity: 0.9 }}>
+                <div style={{ height: 16, background: "#f3f4f6", borderRadius: 6, marginBottom: 8 }} />
+                <div style={{ height: 12, background: "#f3f4f6", borderRadius: 6, marginBottom: 6 }} />
+                <div style={{ height: 12, background: "#f3f4f6", borderRadius: 6, marginBottom: 6 }} />
+                <div style={{ height: 12, background: "#f3f4f6", borderRadius: 6, width: "85%" }} />
               </div>
             )}
 
-            {result && !loading && (
-              <article>
-                <div style={{ whiteSpace: "pre-wrap" }}>{result}</div>
-              </article>
-            )}
+            {result && !loading && <article style={{ lineHeight: 1.7 }}>{result}</article>}
           </div>
         </section>
 
-        {/* Footer / microcopy */}
-        <footer className="mt-6 text-xs text-gray-400">
+        <footer style={{ marginTop: 18, color: "#9CA3AF", fontSize: 13 }}>
           Generated content may require editing. SynapseWrite does not store your data permanently unless you enable save.
         </footer>
       </div>
-    </main>
+    </div>
   );
 }
