@@ -1,58 +1,40 @@
 "use client";
 
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef } from "react";
 
 /**
- * Streaming-first UI with per-paragraph fade-in + typing cursor.
- * Paste this entire file into app/page.js
+ * Frontend: robust rendering for structured JSON response from /api/generate
+ * - Calls POST /api/generate with { topic }
+ * - Expects JSON: { content: string, products: [{name,reason}], verification: { [name]: { verified, sources: [{title,link,snippet}] } } }
+ * - Renders article, and a Verification / Sources card with clickable links
  */
 
 export default function HomePage() {
   const [topic, setTopic] = useState("");
-  // paragraphs: array of completed paragraphs (strings)
-  const [paragraphs, setParagraphs] = useState([]);
-  // current partial paragraph (string) being typed
-  const [partial, setPartial] = useState("");
+  const [content, setContent] = useState("");
+  const [products, setProducts] = useState([]);
+  const [verification, setVerification] = useState({});
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const resultRef = useRef(null);
 
-  // convenience derived string
-  const fullText = [...paragraphs, partial].filter(Boolean).join("\n\n");
-
-  // stats
   const getStats = (text) => {
     if (!text) return { words: 0, minutes: 0 };
     const words = text.trim().split(/\s+/).filter(Boolean).length;
     const minutes = Math.max(1, Math.round(words / 200));
     return { words, minutes };
   };
-  const { words, minutes } = getStats(fullText);
 
-  // small UI helpers
   const copyToClipboard = async (text) => {
     try {
       await navigator.clipboard.writeText(text);
-      toast("Article copied to clipboard ✅");
-    } catch {
+      showToast("Article copied to clipboard ✅");
+    } catch (e) {
       alert("Unable to copy — please select and copy manually.");
     }
   };
 
-  const downloadArticle = (title = "article", content = "") => {
-    const blob = new Blob([`# ${title}\n\n${content}`], { type: "text/markdown" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `${title.replace(/\s+/g, "-").toLowerCase()}.md`;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    URL.revokeObjectURL(url);
-  };
-
-  // Tiny non-intrusive toast
-  function toast(msg, ms = 1600) {
+  function showToast(msg, ms = 1400) {
     const el = document.createElement("div");
     el.textContent = msg;
     Object.assign(el.style, {
@@ -75,26 +57,28 @@ export default function HomePage() {
     }, ms);
   }
 
-  // Reset result
-  function clearResult() {
-    setParagraphs([]);
-    setPartial("");
-    setError(null);
-  }
+  const downloadArticle = (title = "article", contentText = "") => {
+    const blob = new Blob([`# ${title}\n\n${contentText}`], { type: "text/markdown" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${title.replace(/\s+/g, "-").toLowerCase()}.md`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  };
 
-  // Main generate function — streaming aware and robust
   async function generateArticle(topic) {
     if (!topic || !topic.trim()) {
       setError("Please enter a topic to generate an article.");
       return;
     }
 
-    if (typeof window !== "undefined" && window.plausible) {
-      window.plausible("Generate Article");
-    }
-
     setError(null);
-    clearResult();
+    setContent("");
+    setProducts([]);
+    setVerification({});
     setLoading(true);
 
     try {
@@ -104,93 +88,30 @@ export default function HomePage() {
         body: JSON.stringify({ topic }),
       });
 
-      // non-OK handling
       if (!res.ok) {
         let errText = "Something went wrong. Please try again.";
-        const ct = (res.headers.get("content-type") || "").toLowerCase();
         try {
-          if (ct.includes("application/json")) {
-            const j = await res.json();
-            if (j?.error) errText = j.error;
-          } else {
-            const t = await res.text();
-            if (t) errText = t;
-          }
-        } catch {}
+          const j = await res.json();
+          if (j?.error) errText = j.error;
+        } catch (e) {
+          const t = await res.text().catch(() => "");
+          if (t) errText = t;
+        }
         throw new Error(errText);
       }
 
-      const contentType = (res.headers.get("content-type") || "").toLowerCase();
+      // Server always returns JSON (content + optional verification)
+      const j = await res.json();
+      const returnedContent = j?.content ?? "";
+      const returnedProducts = Array.isArray(j?.products) ? j.products : [];
+      const returnedVerification = j?.verification ?? {};
 
-      // JSON final response
-      if (contentType.includes("application/json")) {
-        const data = await res.json();
-        if (!data?.content) throw new Error("No content returned from server.");
-        // Split into paragraphs for the fade-in effect
-        const paras = splitIntoParagraphs(data.content);
-        setParagraphs(paras);
-        setPartial("");
-        setTimeout(() => resultRef.current?.scrollIntoView({ behavior: "smooth" }), 120);
-        setLoading(false);
-        return;
-      }
+      setContent(returnedContent);
+      setProducts(returnedProducts);
+      setVerification(returnedVerification);
 
-      // Plain final text (no stream)
-      if (contentType.includes("text/plain") || contentType.includes("text/markdown")) {
-        const txt = await res.text();
-        const paras = splitIntoParagraphs(txt);
-        setParagraphs(paras);
-        setPartial("");
-        setTimeout(() => resultRef.current?.scrollIntoView({ behavior: "smooth" }), 120);
-        setLoading(false);
-        return;
-      }
-
-      // Streaming path (preferred) — read chunks and build paragraphs progressively
-      if (!res.body) {
-        // fallback: treat as text
-        const fallback = await res.text();
-        const paras = splitIntoParagraphs(fallback);
-        setParagraphs(paras);
-        setPartial("");
-        setLoading(false);
-        return;
-      }
-
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let done = false;
-      let buffer = ""; // accumulate raw text stream
-
-      while (!done) {
-        const { value, done: doneReading } = await reader.read();
-        done = doneReading;
-        if (value) {
-          buffer += decoder.decode(value, { stream: true });
-          // Process buffer into paragraphs and partial
-          const { completed, partial: newPartial } = extractParagraphs(buffer);
-          // Update UI: append any newly completed paragraphs (keep existing)
-          if (completed.length > 0) {
-            // append while preserving previous paragraphs
-            setParagraphs((prev) => {
-              // avoid duplicating: merge prev + completed (simple append)
-              return [...prev, ...completed];
-            });
-            // remove completed from buffer
-            // compute remaining buffer (last partial)
-            const lastPartialIndex = buffer.lastIndexOf("\n\n");
-            buffer = lastPartialIndex >= 0 ? buffer.slice(lastPartialIndex + 2) : buffer;
-          }
-          setPartial(newPartial);
-        }
-      }
-
-      // final flush
-      buffer += decoder.decode();
-      const { completed: finalCompleted, partial: finalPartial } = extractParagraphs(buffer);
-      if (finalCompleted.length > 0) setParagraphs((prev) => [...prev, ...finalCompleted]);
-      setPartial(finalPartial || "");
-      setTimeout(() => resultRef.current?.scrollIntoView({ behavior: "smooth" }), 120);
+      // scroll to result
+      setTimeout(() => resultRef.current?.scrollIntoView({ behavior: "smooth" }), 150);
     } catch (err) {
       const msg = err?.message ?? "Unknown error. Try again.";
       setError(msg);
@@ -200,106 +121,54 @@ export default function HomePage() {
     }
   }
 
-  // Helper: split plain text into paragraphs (trim, split on two or more newlines)
-  function splitIntoParagraphs(text) {
-    if (!text) return [];
-    // Normalize CRLF to LF
-    const normalized = text.replace(/\r\n/g, "\n").trim();
-    // split on blank lines (two or more newlines)
-    const parts = normalized.split(/\n\s*\n/).map((p) => p.trim()).filter(Boolean);
-    return parts;
-  }
+  const { words, minutes } = getStats(content);
 
-  // Helper: from a running buffer, return completed paragraphs and current partial
-  function extractParagraphs(buffer) {
-    // Normalize
-    const normalized = buffer.replace(/\r\n/g, "\n");
-    // If there is a double newline, we consider everything before the last double newline as completed paragraphs
-    const idx = normalized.lastIndexOf("\n\n");
-    if (idx === -1) {
-      // no completed paragraph yet — partial only
-      return { completed: [], partial: normalized };
-    }
-    const completedText = normalized.slice(0, idx);
-    const partial = normalized.slice(idx + 2);
-    const completed = completedText.split(/\n\s*\n/).map((p) => p.trim()).filter(Boolean);
-    return { completed, partial };
-  }
-
-  // small effect: scroll down when paragraphs grow
-  useEffect(() => {
-    if (paragraphs.length > 0) {
-      resultRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
-    }
-  }, [paragraphs.length]);
-
-  // keyboard: press Enter (with meta/ctrl) to generate quickly
-  function handleKeyDown(e) {
-    if ((e.key === "Enter" || e.keyCode === 13) && (e.metaKey || e.ctrlKey)) {
-      generateArticle(topic);
-    }
+  // Helper: extract "Sources:" block from content text (case-insensitive)
+  function extractSourcesBlock(text) {
+    if (!text) return "";
+    const lower = text.toLowerCase();
+    const idx = lower.lastIndexOf("sources:");
+    if (idx === -1) return "";
+    return text.slice(idx + "sources:".length).trim();
   }
 
   return (
     <div>
-      {/* Inject small CSS for animations and cursor */}
       <style>{`
-        .container-narrow { max-width: 920px; margin: 28px auto; padding: 0 20px; }
+        .container { max-width: 920px; margin: 28px auto; padding: 0 20px; font-family: Inter, system-ui, -apple-system, 'Segoe UI', Roboto, Arial; }
         .card { background: #fff; border-radius: 12px; border: 1px solid rgba(2,6,23,0.03); padding: 18px; box-shadow: 0 8px 30px rgba(2,6,23,0.03); }
-        .input-bordered { width: 100%; padding: 12px 14px; border-radius: 10px; border: 1.5px solid #E6EEF8; outline: none; font-size: 15px; transition: box-shadow 160ms, border-color 160ms; box-shadow: 0 2px 8px rgba(2,6,23,0.03); }
-        .input-bordered:focus { border-color: #2563EB; box-shadow: 0 6px 24px rgba(37,99,235,0.12); }
+        .input { width:100%; padding:12px 14px; border-radius:10px; border:1.5px solid #E6EEF8; font-size:15px; outline:none; box-shadow: 0 2px 8px rgba(2,6,23,0.03); }
+        .input:focus { border-color:#2563EB; box-shadow: 0 8px 28px rgba(37,99,235,0.12); }
         .btn { display:inline-flex; align-items:center; gap:8px; padding:9px 14px; border-radius:10px; border:none; font-weight:600; cursor:pointer; }
-        .btn-primary { background: linear-gradient(180deg, #2563EB, #1E4ED8); color:#fff; box-shadow: 0 8px 30px rgba(37,99,235,0.14); }
-        .btn-ghost { background:#fff; border: 1px solid #E6EEF8; color: #0F172A; }
-        .result-card { background:#fff; border-radius:12px; border:1px solid rgba(2,6,23,0.03); padding:18px; box-shadow: 0 10px 36px rgba(2,6,23,0.03); max-height: 62vh; overflow-y:auto; }
-        .para { opacity:0; transform: translateY(6px); transition: opacity 420ms ease, transform 420ms ease; margin-bottom:14px; line-height:1.72; color: #0f172a; }
-        .para.visible { opacity:1; transform: translateY(0); }
-        .partial { color: #0f172a; margin-bottom:6px; white-space:pre-wrap; }
-        .cursor { display:inline-block; width:10px; height:18px; background: linear-gradient(180deg, #111827, #6b7280); margin-left:6px; border-radius:2px; vertical-align:middle; animation: blink 1s steps(1) infinite; }
-        @keyframes blink { 50% { opacity: 0; } }
-        .meta { color:#6b7280; font-size:13px; }
+        .btn-primary { background: linear-gradient(180deg,#2563EB,#1E4ED8); color:#fff; box-shadow: 0 8px 30px rgba(37,99,235,0.14); }
+        .btn-ghost { background:#fff; border: 1px solid #E6EEF8; color:#0F172A; }
+        .result { margin-top: 16px; }
+        .verification { background:#fff; border-radius:10px; border:1px solid rgba(2,6,23,0.03); padding:14px; margin-top:12px; }
+        .verified-badge { display:inline-block; padding:6px 8px; background: #ECFDF5; color: #065F46; border-radius:8px; font-size:13px; }
+        .unverified-badge { display:inline-block; padding:6px 8px; background: #FEF3F2; color: #991B1B; border-radius:8px; font-size:13px; }
+        .sources-list a { color: #2563EB; text-decoration: none; }
       `}</style>
 
-      <div className="container-narrow">
-        {/* Input card */}
-        <section className="card" style={{ marginTop: 6 }}>
+      <div className="container">
+        <section className="card">
           <label style={{ display: "block", fontSize: 13, color: "#374151", marginBottom: 8 }}>Article topic</label>
 
           <div style={{ display: "flex", gap: 12, alignItems: "flex-start" }}>
             <input
-              className="input-bordered"
+              className="input"
               value={topic}
               onChange={(e) => setTopic(e.target.value)}
-              onKeyDown={handleKeyDown}
-              placeholder='Try: "Top AI tools in 2025 — use cases and examples" (Cmd/Ctrl+Enter to generate)'
+              placeholder='e.g., "Best iPhones available in India" (press Enter to generate)'
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) generateArticle(topic);
+              }}
             />
 
             <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-              <button
-                onClick={() => generateArticle(topic)}
-                disabled={loading}
-                className="btn btn-primary"
-                aria-disabled={loading}
-              >
-                {loading ? (
-                  <>
-                    <svg style={{ width: 18, height: 18 }} viewBox="0 0 24 24" fill="none">
-                      <circle cx="12" cy="12" r="10" stroke="rgba(255,255,255,0.35)" strokeWidth="3"></circle>
-                      <path d="M4 12a8 8 0 018-8v8z" fill="white"></path>
-                    </svg>
-                    Generating...
-                  </>
-                ) : (
-                  "Generate"
-                )}
+              <button onClick={() => generateArticle(topic)} disabled={loading} className="btn btn-primary">
+                {loading ? "Generating..." : "Generate"}
               </button>
-
-              <button
-                onClick={() => { setTopic(""); clearResult(); }}
-                className="btn btn-ghost"
-              >
-                Clear
-              </button>
+              <button onClick={() => { setTopic(""); setContent(""); setProducts([]); setVerification({}); setError(null); }} className="btn btn-ghost">Clear</button>
             </div>
           </div>
 
@@ -310,79 +179,83 @@ export default function HomePage() {
           )}
         </section>
 
-        {/* Meta & controls */}
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 16 }}>
-          <div className="meta">
-            <strong style={{ color: "#111827" }}>{words}</strong> words • <strong style={{ color: "#111827" }}>{minutes}</strong> min read
+        <div className="result" ref={resultRef}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+            <div style={{ color: "#6B7280", fontSize: 13 }}>
+              <strong style={{ color: "#111827" }}>{words}</strong> words • <strong style={{ color: "#111827" }}>{minutes}</strong> min read
+            </div>
+            <div style={{ display: "flex", gap: 8 }}>
+              <button onClick={() => content && copyToClipboard(content)} disabled={!content} className="btn btn-ghost">Copy</button>
+              <button onClick={() => content && downloadArticle(topic || "article", content)} disabled={!content} className="btn btn-ghost">Download</button>
+            </div>
           </div>
 
-          <div style={{ display: "flex", gap: 8 }}>
-            <button onClick={() => fullText && copyToClipboard(fullText)} disabled={!fullText} className="btn btn-ghost">Copy</button>
-            <button onClick={() => fullText && downloadArticle(topic || "article", fullText)} disabled={!fullText} className="btn btn-ghost">Download</button>
-            <button onClick={() => generateArticle(topic)} disabled={loading || !topic.trim()} className="btn btn-ghost">Regenerate</button>
+          <div className="card" style={{ minHeight: 160 }}>
+            {!content && !loading && <div style={{ color: "#6B7280" }}>Your generated article will appear here. Try: "Best iPhones available in India".</div>}
+
+            {loading && <div style={{ color: "#9CA3AF" }}>Working... this may take a few seconds while we verify facts (if verification is enabled).</div>}
+
+            {content && (
+              <article style={{ whiteSpace: "pre-wrap", lineHeight: 1.7, color: "#111827" }}>
+                {content}
+              </article>
+            )}
+          </div>
+
+          {/* Verification & Sources */}
+          <div style={{ marginTop: 12 }}>
+            {/* If server returned structured products */}
+            {products && products.length > 0 && (
+              <div className="verification">
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+                  <div style={{ fontWeight: 700 }}>Products mentioned</div>
+                  <div style={{ fontSize: 13, color: "#6B7280" }}>Verification results</div>
+                </div>
+
+                <div style={{ display: "grid", gap: 12 }}>
+                  {products.map((p, i) => {
+                    const v = verification?.[p.name] || { verified: false, sources: [] };
+                    return (
+                      <div key={i} style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "flex-start" }}>
+                        <div>
+                          <div style={{ fontWeight: 700 }}>{p.name}</div>
+                          <div style={{ color: "#6B7280", fontSize: 13 }}>{p.reason}</div>
+                        </div>
+
+                        <div style={{ textAlign: "right" }}>
+                          {v.verified ? <span className="verified-badge">Verified</span> : <span className="unverified-badge">Unverified</span>}
+                          <div style={{ marginTop: 8, textAlign: "right" }}>
+                            <div className="sources-list" style={{ textAlign: "right" }}>
+                              {v.sources && v.sources.length > 0 ? v.sources.slice(0, 4).map((s, idx) => (
+                                <div key={idx} style={{ marginBottom: 6 }}>
+                                  <a href={s.link} target="_blank" rel="noreferrer">{s.title || s.link}</a>
+                                  <div style={{ color: "#9CA3AF", fontSize: 12 }}>{s.snippet}</div>
+                                </div>
+                              )) : <div style={{ color: "#9CA3AF", fontSize: 13 }}>No sources found</div>}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {/* If the model included a plain Sources block within content, show it too */}
+            {content && extractSourcesBlock(content) && (
+              <div className="verification" style={{ marginTop: 12 }}>
+                <div style={{ fontWeight: 700, marginBottom: 8 }}>Sources (from model)</div>
+                <div style={{ color: "#6B7280", whiteSpace: "pre-wrap" }}>{extractSourcesBlock(content)}</div>
+              </div>
+            )}
           </div>
         </div>
 
-        {/* Result card */}
-        <section ref={resultRef} className="result-card" style={{ marginTop: 12 }}>
-          {/* Placeholder */}
-          {!fullText && !loading && (
-            <div style={{ color: "#6b7280" }}>
-              Your generated article will appear here. Try a topic like <strong style={{ color: "#2563EB" }}>"Top AI tools in 2025"</strong>.
-            </div>
-          )}
-
-          {/* Completed paragraphs (fade-in) */}
-          <div>
-            {paragraphs.map((p, i) => (
-              <p key={i} className={"para visible"} dangerouslySetInnerHTML={{ __html: sanitizeParagraph(p) }} />
-            ))}
-          </div>
-
-          {/* Partial paragraph with typing cursor */}
-          {partial && (
-            <div className="partial">
-              <span dangerouslySetInnerHTML={{ __html: sanitizeParagraph(partial) }} />
-              <span className="cursor" />
-            </div>
-          )}
-
-          {/* Loading skeleton if nothing yet */}
-          {loading && paragraphs.length === 0 && !partial && (
-            <div style={{ opacity: 0.9 }}>
-              <div style={{ height: 16, background: "#f3f4f6", borderRadius: 6, marginBottom: 8 }} />
-              <div style={{ height: 12, background: "#f3f4f6", borderRadius: 6, marginBottom: 6 }} />
-              <div style={{ height: 12, background: "#f3f4f6", borderRadius: 6, marginBottom: 6 }} />
-            </div>
-          )}
-        </section>
-
         <footer style={{ marginTop: 18, color: "#9CA3AF", fontSize: 13 }}>
-          Generated content may require editing. SynapseWrite does not store your data permanently unless you enable save.
+          Generated content may require editing. Verification uses web search results (if enabled). Always click source links to confirm.
         </footer>
       </div>
     </div>
   );
-}
-
-/* Utility: very small sanitizer for paragraph HTML rendering.
-   We intentionally keep it minimal — strip script tags and convert newlines to <br>.
-   (This prevents accidental script injection if model returns HTML.) */
-function sanitizeParagraph(text = "") {
-  // Replace < and > to avoid raw HTML injection, then convert simple markdown-like headings to <strong>
-  const stripped = String(text)
-    .replace(/<script[\s\S]*?>[\s\S]*?<\/script>/gi, "")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;");
-
-  // Convert '## ' or '# ' at start to <strong> headings (very small enhancement)
-  const withHeading = stripped.replace(/^######\s?(.*)/gm, "<strong>$1</strong>")
-    .replace(/^#####\s?(.*)/gm, "<strong>$1</strong>")
-    .replace(/^####\s?(.*)/gm, "<strong>$1</strong>")
-    .replace(/^###\s?(.*)/gm, "<strong>$1</strong>")
-    .replace(/^##\s?(.*)/gm, "<strong>$1</strong>")
-    .replace(/^#\s?(.*)/gm, "<strong style='font-size:1.06em'>$1</strong>");
-
-  // convert single newlines to <br> for paragraphs (we already split on double newlines)
-  return withHeading.replace(/\n/g, "<br/>");
 }
