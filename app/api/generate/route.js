@@ -2,61 +2,48 @@
 import OpenAI from "openai";
 
 /**
- * RAG-style generation + verification route
+ * Generalized RAG-enabled SEO article generation endpoint.
  *
- * Flow:
- * 1) Ask model for a structured list of recommended products for the topic (JSON).
- * 2) For each candidate product, run 3 focused SerpAPI queries restricted to India to gather authoritative links/snippets.
- * 3) Keep candidates that have at least one "official" or trusted retailer link (domain whitelist).
- * 4) Send verified snippets back to the model with a strict instruction: "Write the article using only these snippets".
- * 5) If too few verified candidates remain, return needsReview: true to force human review.
+ * Input JSON (POST):
+ * {
+ *   "topic": "Best iPhones available in India",
+ *   "region": "in"           // optional, ISO country code (e.g., "in", "us", "gb")
+ * }
  *
- * Environment variables required:
+ * Output JSON:
+ * {
+ *   title: "...",
+ *   meta: "...",
+ *   content: "...",         // markdown/plain text
+ *   faq: [{q:"", a:""}],
+ *   sources: [{title,link,snippet}],
+ *   verification: {trustedCount: N, note: "..."},
+ *   needsReview: boolean,
+ *   notes: "..."
+ * }
+ *
+ * Env required:
  * - OPENAI_API_KEY (required)
- * - SERPAPI_KEY (recommended — set in Vercel)
+ * - SERPAPI_KEY (optional) — enables live search retrieval (recommended)
  */
 
 const TRUSTED_DOMAINS = [
   "apple.com",
   "flipkart.com",
   "amazon.in",
+  "amazon.com",
   "gsmarena.com",
   "91mobiles.com",
   "ndtv.com",
   "theverge.com",
   "techradar.com",
+  "wired.com",
+  "bbc.com",
 ];
 
-async function serpApiSearch(q, key, num = 6) {
-  if (!key) return [];
-  const url = `https://serpapi.com/search.json?engine=google&q=${encodeURIComponent(q)}&gl=in&hl=en&num=${num}&api_key=${encodeURIComponent(
-    key
-  )}`;
-  const res = await fetch(url);
-  if (!res.ok) {
-    console.warn("SerpAPI fetch failed", res.status);
-    return [];
-  }
-  const j = await res.json().catch(() => ({}));
-  const hits = (j.organic_results || []).map((r) => ({
-    title: r.title || r.link || "",
-    link: r.link || r.displayed_link || "",
-    snippet: r.snippet || (r.rich_snippet?.top?.extensions || []).join(" ") || "",
-  }));
-  // dedupe and return
-  const uniq = [];
-  const seen = new Set();
-  for (const h of hits) {
-    if (!h.link) continue;
-    if (seen.has(h.link)) continue;
-    seen.add(h.link);
-    uniq.push(h);
-  }
-  return uniq;
-}
-
-function isTrusted(link = "") {
-  const l = (link || "").toLowerCase();
+function isTrustedLink(link = "") {
+  if (!link) return false;
+  const l = link.toLowerCase();
   return TRUSTED_DOMAINS.some((d) => l.includes(d));
 }
 
@@ -68,6 +55,62 @@ function safeJSONParse(s) {
   }
 }
 
+async function serpApiSearch(query, serpKey, gl = "us", num = 6) {
+  if (!serpKey) return [];
+  const url = `https://serpapi.com/search.json?engine=google&q=${encodeURIComponent(query)}&gl=${encodeURIComponent(
+    gl
+  )}&num=${num}&api_key=${encodeURIComponent(serpKey)}`;
+  try {
+    const res = await fetch(url, { method: "GET" });
+    if (!res.ok) {
+      console.warn("SerpAPI error", res.status, await res.text().catch(() => ""));
+      return [];
+    }
+    const j = await res.json();
+    const results = (j.organic_results || []).map((r) => ({
+      title: r.title || r.link || r.displayed_link || "",
+      link: r.link || r.displayed_link || "",
+      snippet: r.snippet || (r.rich_snippet?.top?.extensions || []).join(" ") || "",
+    }));
+    // dedupe by link
+    const uniq = [];
+    const seen = new Set();
+    for (const r of results) {
+      if (!r.link) continue;
+      if (seen.has(r.link)) continue;
+      seen.add(r.link);
+      uniq.push(r);
+    }
+    return uniq;
+  } catch (err) {
+    console.warn("SerpAPI fetch failed:", err?.message ?? err);
+    return [];
+  }
+}
+
+function shouldUseRetrieval(topic) {
+  if (!topic) return false;
+  const t = topic.toLowerCase();
+  // keywords that suggest freshness/facts needed
+  const retrievalKeywords = [
+    "best",
+    "top",
+    "latest",
+    "new",
+    "release",
+    "release date",
+    "price",
+    "available",
+    "compare",
+    "vs ",
+    "in ",
+    "202",
+    "2025",
+    "2024",
+  ];
+  return retrievalKeywords.some((k) => t.includes(k));
+}
+
 export async function POST(req) {
   try {
     const body = await req.json().catch(() => ({}));
@@ -76,126 +119,127 @@ export async function POST(req) {
       return new Response(JSON.stringify({ error: "Missing topic" }), { status: 400, headers: { "Content-Type": "application/json" } });
     }
 
-    if (!process.env.OPENAI_API_KEY) {
+    // Determine region: request body -> Accept-Language header -> default 'us'
+    let region = (body?.region || "").toString().trim().toLowerCase();
+    if (!region) {
+      const accept = (req.headers.get("accept-language") || "").split(",")[0] || "";
+      // try to extract country from accept-language like en-IN -> in
+      const parts = accept.split("-");
+      if (parts.length > 1) region = parts[1].toLowerCase();
+    }
+    if (!region) region = "us";
+
+    const openaiKey = process.env.OPENAI_API_KEY;
+    if (!openaiKey) {
       return new Response(JSON.stringify({ error: "OPENAI_API_KEY not set" }), { status: 500, headers: { "Content-Type": "application/json" } });
     }
-
-    const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
     const serpKey = process.env.SERPAPI_KEY || "";
 
-    // Step 1: ask model for structured candidate products (guarantee JSON output)
-    const now = new Date().toISOString().slice(0, 10);
-    const askCandidates = [
+    const openai = new OpenAI({ apiKey: openaiKey });
+
+    // Step A: create SEO outline (title, meta, headings, 3-5 FAQ prompts)
+    const outlinePrompt = [
       {
         role: "system",
         content:
-          `You are an assistant that returns a JSON array of recommended products for the requested topic.`
-          + ` Output ONLY valid JSON — an object: { "candidates": [{ "name":"", "short_reason":"" }] } and nothing else.`,
+          "You are an expert SEO copywriter that outputs structured SEO-ready metadata and outline. " +
+          "Return a JSON object ONLY with keys: title, meta, outline (array of heading strings), faq (array of {q,a} pairs - short answers). " +
+          "Be concise and use the topic as given.",
       },
-      {
-        role: "user",
-        content: `Topic: ${topic}\n\nReturn a JSON object like:\n{ "candidates": [ { "name": "Model name", "short_reason": "one-line reason why this fits the topic (India-specific)"} ] }\n\nKeep suggestions to maximum 8 candidates. Use low creativity — factual suggestions only.`,
-      },
+      { role: "user", content: `Topic: ${topic}\n\nReturn the JSON object.` },
     ];
 
-    const candidateResp = await openai.chat.completions.create({
+    const outlineResp = await openai.chat.completions.create({
       model: "gpt-4o-mini",
-      messages: askCandidates,
-      max_tokens: 800,
+      messages: outlinePrompt,
+      max_tokens: 600,
       temperature: 0.0,
     });
 
-    const candidateRaw = candidateResp?.choices?.[0]?.message?.content ?? candidateResp?.choices?.[0]?.text ?? "";
-    let parsed = safeJSONParse(candidateRaw.trim());
-    if (!parsed) {
-      // try to extract JSON braces block
-      const bStart = candidateRaw.indexOf("{");
-      const bEnd = candidateRaw.lastIndexOf("}");
-      if (bStart !== -1 && bEnd !== -1 && bEnd > bStart) {
-        parsed = safeJSONParse(candidateRaw.slice(bStart, bEnd + 1));
+    const outlineRaw = outlineResp?.choices?.[0]?.message?.content ?? outlineResp?.choices?.[0]?.text ?? "";
+    let outline = safeJSONParse(outlineRaw.trim());
+    if (!outline) {
+      // try to extract JSON block
+      const s = outlineRaw.indexOf("{");
+      const e = outlineRaw.lastIndexOf("}");
+      if (s !== -1 && e !== -1 && e > s) {
+        outline = safeJSONParse(outlineRaw.slice(s, e + 1));
       }
     }
-    if (!parsed || !Array.isArray(parsed.candidates)) {
-      // failed to get structured candidates — fallback: return error
-      return new Response(JSON.stringify({ error: "Failed to parse candidate list from model. Try again." }), {
-        status: 500,
-        headers: { "Content-Type": "application/json" },
-      });
-    }
-
-    const candidates = parsed.candidates.slice(0, 8);
-
-    // Step 2: For each candidate, run focused searches and collect sources
-    const verification = {}; // name -> { sources: [], trustedCount, allHits }
-    for (const c of candidates) {
-      const name = (c.name || "").toString();
-      if (!name) continue;
-      // queries: <name> India release date, <name> India price, <name> specs India
-      const queries = [
-        `${name} India release date`,
-        `${name} India price`,
-        `${name} specs`,
-      ];
-      let hits = [];
-      if (serpKey) {
-        for (const q of queries) {
-          const r = await serpApiSearch(q, serpKey, 6).catch(() => []);
-          for (const h of r) {
-            if (!hits.find((x) => x.link === h.link)) hits.push(h);
-          }
-        }
-      }
-      // count trusted hits
-      const trustedHits = hits.filter((h) => isTrusted(h.link));
-      verification[name] = {
-        name,
-        short_reason: c.short_reason || "",
-        sources: hits,
-        trustedCount: trustedHits.length,
+    // If still no outline, provide a fallback
+    if (!outline) {
+      outline = {
+        title: topic,
+        meta: `An article about ${topic}.`,
+        outline: ["Introduction", "Main points", "Conclusion"],
+        faq: [],
       };
     }
 
-    // Step 3: filter candidates to only those with at least 1 trusted source
-    const VERIFIED_THRESHOLD = 1; // require at least one trusted link (adjustable)
-    const verifiedCandidates = candidates.filter((c) => {
-      const v = verification[c.name];
-      return v && v.trustedCount >= VERIFIED_THRESHOLD;
-    });
+    // Decide whether to retrieve live web snippets
+    const doRetrieve = shouldUseRetrieval(topic);
+    let sources = [];
+    let verification = { trustedCount: 0, note: "" };
 
-    // If too few verified candidates (e.g., less than 1/2 of suggested), set needsReview
-    const needsReview = verifiedCandidates.length < Math.max(1, Math.round(candidates.length / 2));
-
-    // Step 4: If we have verified snippets, build a context string and ask model to compose final article using only these snippets
-    let finalArticle = "";
-    const collectedSourcesText = [];
-    if (verifiedCandidates.length > 0) {
-      // create context
-      for (const vc of verifiedCandidates) {
-        const v = verification[vc.name];
-        // prefer trusted hits first
-        const trusted = v.sources.filter((s) => isTrusted(s.link));
-        const chosen = trusted.length ? trusted.slice(0, 3) : v.sources.slice(0, 3);
-        for (const s of chosen) {
-          collectedSourcesText.push(`- ${vc.name} >> ${s.title}\n${s.link}\n${s.snippet || ""}`);
-        }
+    if (doRetrieve && serpKey) {
+      // Build a focused query that mixes site hints and general query
+      // We run two searches: focused (trusted sites) and general
+      const focusedQuery = `${topic} site:amazon.${region} OR site:amazon.in OR site:flipkart.com OR site:apple.com OR site:gsmarena.com OR site:91mobiles.com`;
+      let hits = await serpApiSearch(focusedQuery, serpKey, region, 6).catch(() => []);
+      if (!hits || hits.length === 0) {
+        hits = await serpApiSearch(topic, serpKey, region, 8).catch(() => []);
       }
+      sources = hits.slice(0, 12);
+
+      // Count trusted hits
+      const trustedCount = sources.filter((s) => isTrustedLink(s.link)).length;
+      verification.trustedCount = trustedCount;
+      verification.note = trustedCount > 0 ? "Trusted sources found." : "No trusted sources found for this query.";
+    } else if (doRetrieve && !serpKey) {
+      verification.trustedCount = 0;
+      verification.note = "Retrieval was requested but SERPAPI_KEY is not set. Set SERPAPI_KEY to enable live verification.";
+    } else {
+      verification.trustedCount = 0;
+      verification.note = "Retrieval not required for this topic.";
+    }
+
+    // Step B: Compose final article
+    // If we have sources, create a strict context instructing the model to use only those snippets
+    let finalContent = "";
+    let needsReview = false;
+
+    if (sources && sources.length > 0) {
+      // build snippets context (prioritize trusted links)
+      const trusted = sources.filter((s) => isTrustedLink(s.link));
+      const chosen = trusted.length ? trusted.slice(0, 6) : sources.slice(0, 6);
+
+      const contextText = chosen
+        .map((s, i) => `${i + 1}. ${s.title}\n${s.link}\n${s.snippet || ""}`)
+        .join("\n\n");
 
       const composeSys = `
-You are a factual writer. Use ONLY the provided source snippets below to write a buyer-friendly article on the requested topic.
-If a fact is not supported by the provided snippets, write "I could not verify this" for that fact.
-Do not invent release dates, prices, or availability.
-Output plain text (Markdown ok). Include a "Sources" section listing the URLs used.
+You are a factual content writer. You have been given ONLY the following web snippets and links as the source of truth.
+Use ONLY these snippets to write the article. If a fact (release date, price, availability, or a claim) is not supported by the provided snippets, explicitly write "I could not verify this" for that fact.
+Output a final SEO-ready article matching this outline: include the title, a short meta description (single paragraph), and the article body with the headings given in the outline. Include a "Sources" section listing the URLs used.
 `;
 
       const composeUser = [
         `Topic: ${topic}`,
         "",
-        `Verified source snippets (use these only):\n${collectedSourcesText.join("\n\n")}`,
+        `SEO outline (title/meta/outline/faq): ${JSON.stringify(outline)}`,
         "",
-        `Requirements:\n- Start with 2-3 sentence summary.\n- For each verified product, provide model name, release month & year (only if present in sources), a short pros/cons, and explicit evidence links.\n- At end include Sources with clickable URLs.`,
+        "Verified source snippets (use these only):",
+        contextText,
+        "",
+        "Requirements:",
+        "- Start with the SEO title (use outline.title).",
+        "- Provide a one-sentence meta description (max 160 chars).",
+        "- Follow the outline headings and produce ~700-1500 words depending on the topic complexity.",
+        "- Add an FAQ section using outline.faq (short answers).",
+        "- End with Sources (list URLs).",
       ].join("\n");
 
-      const finalResp = await openai.chat.completions.create({
+      const composeResp = await openai.chat.completions.create({
         model: "gpt-4o-mini",
         messages: [
           { role: "system", content: composeSys },
@@ -205,25 +249,76 @@ Output plain text (Markdown ok). Include a "Sources" section listing the URLs us
         temperature: 0.0,
       });
 
-      finalArticle = finalResp?.choices?.[0]?.message?.content ?? finalResp?.choices?.[0]?.text ?? "";
+      finalContent = composeResp?.choices?.[0]?.message?.content ?? composeResp?.choices?.[0]?.text ?? "";
+      // If trustedCount is zero, we may want to mark for review
+      needsReview = verification.trustedCount === 0;
     } else {
-      // No verified candidates: do not return a fully confident article. Return model-less cautious summary or ask for human review.
-      finalArticle = `We could not find enough authoritative sources (Apple / Flipkart / Amazon / trusted review sites) for confident recommendations on "${topic}". This item has been flagged for human review.`;
+      // No sources (either retrieval disabled or no hits)
+      // Generate a cautious SEO article but mark needsReview true if retrieval was suggested but no sources
+      const fallbackSys = `
+You are an SEO content writer. Produce a cautious, well-structured SEO article for the given outline.
+If the topic likely depends on fresh facts or local availability and you are not certain, say "I could not verify this" for uncertain facts.
+`;
+
+      const fallbackUser = [
+        `Topic: ${topic}`,
+        "",
+        `SEO outline (title/meta/outline/faq): ${JSON.stringify(outline)}`,
+        "",
+        "Requirements:",
+        "- Use the outline headings.",
+        "- Provide a one-sentence meta (160 chars).",
+        "- Add FAQ answers from the outline.",
+        "- If a claim is time-sensitive or requires live verification, write 'I could not verify this'.",
+      ].join("\n");
+
+      const fallbackResp = await openai.chat.completions.create({
+        model: "gpt-4o-mini",
+        messages: [
+          { role: "system", content: fallbackSys },
+          { role: "user", content: fallbackUser },
+        ],
+        max_tokens: 1600,
+        temperature: 0.0,
+      });
+
+      finalContent = fallbackResp?.choices?.[0]?.message?.content ?? fallbackResp?.choices?.[0]?.text ?? "";
+      needsReview = doRetrieve && !serpKey; // retrieval needed but not possible
     }
 
-    // Prepare response
+    // Build FAQ array from outline if present (ensure it's an array of objects)
+    const faq = Array.isArray(outline.faq)
+      ? outline.faq.map((f) => {
+          if (typeof f === "string") return { q: f, a: "" };
+          if (f && typeof f === "object" && f.q) return { q: f.q, a: f.a || "" };
+          return { q: String(f), a: "" };
+        })
+      : [];
+
+    const responsePayload = {
+      title: outline.title || topic,
+      meta: outline.meta || "",
+      content: finalContent,
+      faq,
+      sources,
+      verification,
+      needsReview,
+      notes: verification.note || "",
+      region,
+      retrieved: doRetrieve && Boolean(serpKey),
+    };
+
+    return new Response(JSON.stringify(responsePayload), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+  } catch (err) {
+    console.error("generate route error:", err);
     return new Response(
       JSON.stringify({
-        content: finalArticle,
-        candidates,
-        verification,
-        verifiedCandidates: verifiedCandidates.map((c) => c.name),
-        needsReview,
+        error: err?.message ?? String(err),
       }),
-      { status: 200, headers: { "Content-Type": "application/json" } }
+      { status: 500, headers: { "Content-Type": "application/json" } }
     );
-  } catch (err) {
-    console.error("Generate route error:", err);
-    return new Response(JSON.stringify({ error: err?.message ?? String(err) }), { status: 500, headers: { "Content-Type": "application/json" } });
   }
 }
