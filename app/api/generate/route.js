@@ -2,44 +2,61 @@
 import OpenAI from "openai";
 
 /**
- * Generate route with optional verification via SerpAPI.
- *
- * Behavior:
- * - Produces a structured article (content) and a list of recommended products (if any).
- * - If SERPAPI_KEY is set in env, verifies each product by searching Google (SerpAPI) with gl=in.
- * - Returns JSON: { content: string, products: Array<{ name, reason }>, verification: { [productName]: { verified: bool, sources: [{ title, link, snippet }] } } }
+ * Dynamic generate route (RAG-ish):
+ * - If SERPAPI_KEY is present, searches Google (via SerpAPI) restricted to India (gl=in)
+ *   and collects top organic results (title, link, snippet).
+ * - Feeds those snippets to the model with a strict system prompt that forbids hallucination
+ *   and instructs the model to "use only the provided sources".
+ * - Returns JSON: { content: string, sources: [{title,link,snippet}], note: "" }
  *
  * Notes:
- * - Needs OPENAI_API_KEY (required) and optional SERPAPI_KEY (for verification).
- * - Keep temperature low for factual outputs.
+ * - Requires OPENAI_API_KEY env in Vercel.
+ * - Optional SERPAPI_KEY env in Vercel. If set, verification/search will run (recommended).
+ * - Keep temperature low to favor factual outputs.
  */
 
-async function serpApiSearch(query) {
-  const key = process.env.SERPAPI_KEY;
-  if (!key) return [];
-  const url = `https://serpapi.com/search.json?engine=google&q=${encodeURIComponent(query)}&gl=in&hl=en&num=4&api_key=${encodeURIComponent(
-    key
+async function serpApiSearch(query, serpKey, num = 6) {
+  if (!serpKey) return [];
+  const url = `https://serpapi.com/search.json?engine=google&q=${encodeURIComponent(query)}&gl=in&hl=en&num=${num}&api_key=${encodeURIComponent(
+    serpKey
   )}`;
   const res = await fetch(url);
   if (!res.ok) {
-    console.warn("SerpAPI request failed:", res.status, await res.text().catch(() => ""));
+    console.warn("SerpAPI failed:", res.status, await res.text().catch(() => ""));
     return [];
   }
   const j = await res.json();
-  // organic_results may contain objects with title, link, snippet
-  return j.organic_results?.map((r) => ({
-    title: r.title || r.serpapi_link || r.displayed_link || "",
-    link: r.link || r.serpapi_link || r.displayed_link || "",
-    snippet: r.snippet || r.rich_snippet?.top?.extensions?.join(" ") || "",
-  })) || [];
+  const hits = (j.organic_results || []).map((r) => ({
+    title: r.title || r.link || "",
+    link: r.link || r.displayed_link || "",
+    snippet: r.snippet || (r.rich_snippet?.top?.extensions || []).join(" ") || "",
+  }));
+  // Deduplicate links
+  const uniq = [];
+  const seen = new Set();
+  for (const h of hits) {
+    if (!h.link) continue;
+    if (seen.has(h.link)) continue;
+    seen.add(h.link);
+    uniq.push(h);
+    if (uniq.length >= num) break;
+  }
+  return uniq;
 }
 
-function safeJSONParse(s) {
-  try {
-    return JSON.parse(s);
-  } catch {
-    return null;
-  }
+function officialDomainScore(link = "") {
+  const domainSignals = [
+    "apple.com",
+    "flipkart.com",
+    "amazon.in",
+    "gsmarena.com",
+    "91mobiles.com",
+    "ndtv.com",
+    "theverge.com",
+    "techradar.com",
+  ];
+  const l = (link || "").toLowerCase();
+  return domainSignals.some((d) => l.includes(d));
 }
 
 export async function POST(req) {
@@ -57,134 +74,101 @@ export async function POST(req) {
       return new Response(JSON.stringify({ error: "OPENAI_API_KEY not set" }), { status: 500, headers: { "Content-Type": "application/json" } });
     }
 
+    const serpKey = process.env.SERPAPI_KEY || "";
+    let sources = [];
+    let note = "";
+
+    // If SERPAPI_KEY present, try to collect authoritative snippets
+    if (serpKey) {
+      // Build a focused query that favors official retailers / Apple India and trusted review sites
+      const focusedQuery = `${topic} site:apple.com OR site:flipkart.com OR site:amazon.in OR site:gsmarena.com OR site:91mobiles.com`;
+      try {
+        const hits = await serpApiSearch(focusedQuery, serpKey, 6);
+        // If we didn't get useful hits from the focused query, fall back to generic query
+        if (!hits || hits.length === 0) {
+          const fallbackHits = await serpApiSearch(topic, serpKey, 6);
+          sources = fallbackHits;
+        } else {
+          sources = hits;
+        }
+      } catch (err) {
+        console.warn("SerpAPI search error:", err?.message ?? err);
+        sources = [];
+      }
+      if (sources.length === 0) {
+        note = "No web sources found for this topic (SerpAPI returned no hits). Generation will proceed without live verification.";
+      }
+    } else {
+      // No SERPAPI_KEY provided
+      note = "SERPAPI_KEY not set — generation will run without live web verification. Add SERPAPI_KEY in Vercel to enable live checks.";
+    }
+
+    // Build a context string from collected sources (if any)
+    const sourcesText = (sources || [])
+      .map((s, i) => `${i + 1}. ${s.title}\n${s.link}\n${s.snippet || ""}`)
+      .join("\n\n");
+
     const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
-    const now = new Date().toISOString().slice(0, 10);
-
-    // We ask the model to output a JSON object with "content" (string article) and "products" (array)
-    // This helps extract product names reliably for verification.
-    const system = `You are a careful, factual article writer for a public blog. ALWAYS include a "Sources" section at the end if possible.
-When listing products (like phones), output structured JSON at the end in the following exact format (so it can be parsed):
-
-###
-JSON_START
-{
-  "content": "<full article text as markdown or plain text>",
-  "products": [
-    { "name": "<product name>", "reason": "<one-line reason for India buyers>" }
-  ],
-  "sources": "<optional plain text sources block>"
-}
-JSON_END
-###
-
-Important:
-- Keep tone factual. Use release month & year when you know it.
-- If you cannot verify a fact, write 'I could not verify this' in the article or in the product reason.
-- Do not include any other JSON outside the JSON_START/JSON_END block.
-- The current date is ${now}. Use it for recency.
+    // Strong system prompt: must use only provided sources, do not hallucinate
+    const sysPrompt = `
+You are a careful, factual article writer for a public-facing blog. You must only use the provided web snippets and links when producing factual claims.
+- If the required fact (e.g., release date, availability) is not present in the provided sources, explicitly say "I could not verify this fact" rather than inventing it.
+- At the end include a "Sources" section listing the exact URLs used.
+- Produce a clear, neutral, buyer-friendly article for the topic below.
+- If no sources are provided, say so and provide a cautious general answer, marking uncertain claims with "I could not verify".
+- Output should be plain text (Markdown is fine).
+Current date: ${new Date().toISOString().slice(0, 10)}.
 `;
 
-    const user = `Write an informative article about: ${topic}.
-Requirements:
+    // User prompt: include sources as context
+    const userPromptParts = [
+      `Topic: ${topic}`,
+      "",
+      `Context: The following web search results (titles, links, snippets) were collected for this topic (India-focused). Use them to verify claims and write the article. Do NOT use external facts beyond these snippets unless you explicitly state you could not verify.`,
+      "",
+      sourcesText ? `Sources:\n\n${sourcesText}` : "No web snippets provided.",
+      "",
+      `Requirements:
 - Start with a 2-3 sentence summary.
-- Recommend relevant products for buyers in India (if topic is about devices), each with a one-line reason.
-- At the end include Sources if you used them.
-- Then output a JSON block (as described) between JSON_START and JSON_END containing "content" and "products".
-Keep temperature low (0.0-0.2).`;
+- If the topic is about products (phones), list recommended models in India and for each include release month & year if found in sources, short pros/cons, and the specific link(s) you used as evidence.
+- Include a "Sources" section with the clickable URLs.
+- If you cannot verify a fact, write "I could not verify this" for that fact.
+- Tone: factual, neutral.`,
+    ];
 
-    // Create completion (non-streaming) to reliably parse JSON block
+    const messages = [
+      { role: "system", content: sysPrompt },
+      { role: "user", content: userPromptParts.join("\n") },
+    ];
+
+    // Call the model (single completion, low temperature)
     const completion = await client.chat.completions.create({
       model: "gpt-4o-mini",
-      messages: [
-        { role: "system", content: system },
-        { role: "user", content: user },
-      ],
+      messages,
       max_tokens: 2000,
-      temperature: 0.1,
+      temperature: 0.0,
     });
 
-    const raw = completion?.choices?.[0]?.message?.content ?? completion?.choices?.[0]?.text ?? "";
-    // Try to find JSON block between JSON_START and JSON_END
-    const startIdx = raw.indexOf("JSON_START");
-    const endIdx = raw.indexOf("JSON_END");
-    let parsed = null;
-    if (startIdx !== -1 && endIdx !== -1 && endIdx > startIdx) {
-      const jsonText = raw.slice(startIdx + "JSON_START".length, endIdx).trim();
-      parsed = safeJSONParse(jsonText);
-    } else {
-      // fallback: sometimes the model returns just JSON without markers
-      parsed = safeJSONParse(raw.trim());
-    }
+    const rawOutput = completion?.choices?.[0]?.message?.content ?? completion?.choices?.[0]?.text ?? "";
 
-    // If parsing failed, try to recover by searching for the first "{"..."}" block
-    if (!parsed) {
-      const braceStart = raw.indexOf("{");
-      const braceEnd = raw.lastIndexOf("}");
-      if (braceStart !== -1 && braceEnd !== -1 && braceEnd > braceStart) {
-        const maybe = raw.slice(braceStart, braceEnd + 1);
-        parsed = safeJSONParse(maybe);
-      }
-    }
+    // Build verification summary: mark as "official" if at least one official domain matched
+    const hasOfficial = (sources || []).some((s) => officialDomainScore(s.link));
+    const verificationSummary = {
+      verifiedBySearch: hasOfficial,
+      sourcesCount: sources.length,
+      note,
+    };
 
-    // If still no parsed JSON, return the plain article text (best-effort)
-    if (!parsed) {
-      // return raw text as content
-      return new Response(JSON.stringify({ content: raw, products: [], verification: {} }), {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      });
-    }
-
-    const content = parsed.content ?? raw;
-    const products = Array.isArray(parsed.products) ? parsed.products : [];
-
-    // If SerpAPI key exists, verify products
-    const verification = {};
-    if (process.env.SERPAPI_KEY && products.length > 0) {
-      for (const p of products) {
-        const name = (p.name || "").toString();
-        if (!name) continue;
-        try {
-          // Search queries: "<product name> release date India", "<product name> price India", "<product name> specs"
-          const queries = [
-            `${name} release date India`,
-            `${name} India price`,
-            `${name} specs`,
-          ];
-          // gather top results for each query (deduped)
-          const allResults = [];
-          for (const q of queries) {
-            const hits = await serpApiSearch(q);
-            for (const h of hits) {
-              if (h.link && !allResults.find((x) => x.link === h.link)) allResults.push(h);
-            }
-          }
-          // simple verification heuristic:
-          // if we find at least one official or retail listing (apple.com, flipkart, amazon.in, gsmarena, 91mobiles), mark as likely verified
-          const domainSignals = ["apple.com", "flipkart.com", "amazon.in", "gsmarena.com", "91mobiles.com", "ndtv.com", "theverge.com", "gsmarena.com"];
-          const matched = allResults.filter((r) => domainSignals.some((d) => (r.link || "").includes(d)));
-          const verified = matched.length > 0;
-          verification[name] = {
-            verified,
-            sources: (matched.length > 0 ? matched : allResults.slice(0, 6)).map((r) => ({
-              title: r.title || r.link,
-              link: r.link,
-              snippet: r.snippet || "",
-            })),
-          };
-        } catch (err) {
-          console.warn("Verification error for", p.name, err?.message ?? err);
-          verification[p.name] = { verified: false, sources: [] };
-        }
-      }
-    }
-
-    // Return structured JSON
-    return new Response(JSON.stringify({ content, products, verification }), {
-      status: 200,
-      headers: { "Content-Type": "application/json" },
-    });
+    // Return the article text plus the sources we collected and a small verification summary
+    return new Response(
+      JSON.stringify({
+        content: rawOutput,
+        sources: sources || [],
+        verification: verificationSummary,
+      }),
+      { status: 200, headers: { "Content-Type": "application/json" } }
+    );
   } catch (err) {
     console.error("Route error:", err);
     return new Response(JSON.stringify({ error: err?.message ?? String(err) }), {
