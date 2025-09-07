@@ -2,17 +2,13 @@
 /**
  * Human Review API endpoint
  *
- * POST body: { topic, region, reason, payload }
- *   - topic: the topic string
- *   - region: e.g. "us", "in"
- *   - reason: reason for requesting review (string)
- *   - payload: the article JSON or a link to it
+ * Supports:
+ * - POST /api/review → create a review record
+ * - GET  /api/review → list all pending review records
  *
- * Behavior:
- * - If REVIEW_WEBHOOK env is set, posts record to webhook (Slack/Discord/Notion/etc.).
- * - Saves record in cache:
- *    - If USE_VERCEL_KV=1, uses @vercel/kv (requires KV integration).
- *    - Else uses in-memory fallback (ephemeral).
+ * Env vars:
+ * - USE_VERCEL_KV=1 (optional) → store in Vercel KV (@vercel/kv must be configured)
+ * - REVIEW_WEBHOOK (optional) → if set, POSTs new reviews to this webhook (Slack/Discord/Notion/etc.)
  */
 
 let kv = null;
@@ -65,6 +61,7 @@ async function cacheSet(key, value) {
   return true;
 }
 
+// --- POST handler: add a review record ---
 export async function POST(req) {
   try {
     const body = await req.json().catch(() => ({}));
@@ -99,7 +96,7 @@ export async function POST(req) {
       }
     }
 
-    // Save to cache
+    // Save in cache (prepend)
     const key = "pendingReviews";
     const prev = (await cacheGet(key)) || [];
     prev.unshift(record);
@@ -110,7 +107,26 @@ export async function POST(req) {
       headers: { "Content-Type": "application/json" },
     });
   } catch (e) {
-    console.error("review route error", e);
+    console.error("review POST error", e);
+    return new Response(
+      JSON.stringify({ error: e?.message || String(e) }),
+      { status: 500, headers: { "Content-Type": "application/json" } }
+    );
+  }
+}
+
+// --- GET handler: list all pending reviews ---
+export async function GET() {
+  try {
+    const key = "pendingReviews";
+    const records = (await cacheGet(key)) || [];
+
+    return new Response(JSON.stringify(records), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+  } catch (e) {
+    console.error("review GET error", e);
     return new Response(
       JSON.stringify({ error: e?.message || String(e) }),
       { status: 500, headers: { "Content-Type": "application/json" } }
