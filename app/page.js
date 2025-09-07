@@ -3,7 +3,10 @@
 import { useState, useRef } from "react";
 
 /**
- * Polished UI for SynapseWrite (updated to match new header + font)
+ * Robust UI for SynapseWrite:
+ * - Detects response content-type
+ * - Handles JSON fallback, plain text fallback, and streaming plain-text chunks
+ * - Keeps the polished UI and controls
  */
 
 export default function HomePage() {
@@ -47,6 +50,7 @@ export default function HomePage() {
       return;
     }
 
+    // Analytics (Plausible) — safe no-op if not present
     if (typeof window !== "undefined" && window.plausible) {
       window.plausible("Generate Article");
     }
@@ -62,21 +66,73 @@ export default function HomePage() {
         body: JSON.stringify({ topic }),
       });
 
+      // If non-OK, try to parse JSON error or text error
       if (!res.ok) {
         let errText = "Something went wrong. Please try again.";
+        const ct = res.headers.get("content-type") || "";
         try {
-          const j = await res.json();
-          if (j?.error) errText = j.error;
-        } catch (e) {}
+          if (ct.includes("application/json")) {
+            const j = await res.json();
+            if (j?.error) errText = j.error;
+          } else {
+            const t = await res.text();
+            if (t) errText = t;
+          }
+        } catch (e) {
+          // keep generic
+        }
         throw new Error(errText);
       }
 
-      const data = await res.json();
-      if (!data?.content) {
-        throw new Error("No content returned from the server. Try again.");
+      const contentType = (res.headers.get("content-type") || "").toLowerCase();
+
+      // CASE 1: server returned JSON (common fallback)
+      if (contentType.includes("application/json")) {
+        const data = await res.json();
+        if (!data?.content) {
+          throw new Error("No content returned from server.");
+        }
+        setResult(data.content);
+        setTimeout(() => resultRef.current?.scrollIntoView({ behavior: "smooth" }), 150);
+        return;
       }
 
-      setResult(data.content);
+      // CASE 2: server returned final plain text (not streamed)
+      if (contentType.includes("text/plain") || contentType.includes("text/markdown")) {
+        const txt = await res.text();
+        setResult(txt);
+        setTimeout(() => resultRef.current?.scrollIntoView({ behavior: "smooth" }), 150);
+        return;
+      }
+
+      // CASE 3: streaming plain text (preferred path)
+      // If response has a body, treat as stream of text chunks
+      if (!res.body) {
+        // no body and not json/text -> fallback to text()
+        const fallback = await res.text();
+        setResult(fallback);
+        setTimeout(() => resultRef.current?.scrollIntoView({ behavior: "smooth" }), 150);
+        return;
+      }
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let done = false;
+      let accumulated = "";
+
+      // Read chunks and append progressively
+      while (!done) {
+        const { value, done: doneReading } = await reader.read();
+        done = doneReading;
+        if (value) {
+          accumulated += decoder.decode(value, { stream: true });
+          setResult(accumulated);
+        }
+      }
+
+      // final flush (in case)
+      accumulated += decoder.decode();
+      setResult(accumulated);
       setTimeout(() => resultRef.current?.scrollIntoView({ behavior: "smooth" }), 150);
     } catch (err) {
       const msg = err?.message ?? "Unknown error. Try again.";
@@ -94,7 +150,9 @@ export default function HomePage() {
       <div className="container-narrow">
         {/* Input card */}
         <section className="card" style={{ marginTop: 28 }}>
-          <label className="small text-muted" style={{ display: "block", marginBottom: 8 }}>Article topic</label>
+          <label className="small text-muted" style={{ display: "block", marginBottom: 8 }}>
+            Article topic
+          </label>
           <div style={{ display: "flex", gap: 12, alignItems: "flex-start" }}>
             <input
               className="input"
@@ -132,7 +190,7 @@ export default function HomePage() {
           </div>
 
           {error && (
-            <div style={{ marginTop: 12 }} className="card" >
+            <div style={{ marginTop: 12 }} className="card">
               <div style={{ color: "#B91C1C" }}>⚠️ {error}</div>
             </div>
           )}
