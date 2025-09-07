@@ -1,37 +1,19 @@
-<!DOCTYPE html>
-<html>
-<head>
-  <title>Streaming Demo</title>
-</head>
-<body>
-  <button id="writeBtn">Write Article</button>
-  <div id="status"></div>
-  <article id="output" style="white-space: pre-wrap; margin-top:1em;"></article>
+<button id="exportBtn">Export to WordPress</button>
 
-  <script>
-    document.getElementById('writeBtn').onclick = async () => {
-      document.getElementById('status').textContent = 'Generating…';
-      document.getElementById('output').innerHTML = '';
-
-      const res = await fetch('http://localhost:3000/api/generate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prompt: 'Write about remote work' })
-      });
-
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let done = false;
-      while (!done) {
-        const { value, done: doneReading } = await reader.read();
-        done = doneReading;
-        if (value) {
-          const chunk = decoder.decode(value, { stream: true });
-          document.getElementById('output').innerHTML += chunk;
-        }
-      }
-      document.getElementById('status').textContent = '✅ Done';
-    };
-  </script>
-</body>
-</html>
+<script>
+document.getElementById('exportBtn').onclick = async () => {
+  const title = "My Streamed Article";
+  const content = document.getElementById('output').innerHTML; // take generated HTML
+  const res = await fetch("http://localhost:4000/exportToWP", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ title, content })
+  });
+  const data = await res.json();
+  if (data.success) {
+    alert("✅ Draft created at " + data.postUrl);
+  } else {
+    alert("❌ Failed: " + data.error);
+  }
+};
+</script>
