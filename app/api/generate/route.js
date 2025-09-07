@@ -2,36 +2,48 @@
 import OpenAI from "openai";
 
 /**
- * Dynamic generate route (RAG-ish):
- * - If SERPAPI_KEY is present, searches Google (via SerpAPI) restricted to India (gl=in)
- *   and collects top organic results (title, link, snippet).
- * - Feeds those snippets to the model with a strict system prompt that forbids hallucination
- *   and instructs the model to "use only the provided sources".
- * - Returns JSON: { content: string, sources: [{title,link,snippet}], note: "" }
+ * RAG-style generation + verification route
  *
- * Notes:
- * - Requires OPENAI_API_KEY env in Vercel.
- * - Optional SERPAPI_KEY env in Vercel. If set, verification/search will run (recommended).
- * - Keep temperature low to favor factual outputs.
+ * Flow:
+ * 1) Ask model for a structured list of recommended products for the topic (JSON).
+ * 2) For each candidate product, run 3 focused SerpAPI queries restricted to India to gather authoritative links/snippets.
+ * 3) Keep candidates that have at least one "official" or trusted retailer link (domain whitelist).
+ * 4) Send verified snippets back to the model with a strict instruction: "Write the article using only these snippets".
+ * 5) If too few verified candidates remain, return needsReview: true to force human review.
+ *
+ * Environment variables required:
+ * - OPENAI_API_KEY (required)
+ * - SERPAPI_KEY (recommended — set in Vercel)
  */
 
-async function serpApiSearch(query, serpKey, num = 6) {
-  if (!serpKey) return [];
-  const url = `https://serpapi.com/search.json?engine=google&q=${encodeURIComponent(query)}&gl=in&hl=en&num=${num}&api_key=${encodeURIComponent(
-    serpKey
+const TRUSTED_DOMAINS = [
+  "apple.com",
+  "flipkart.com",
+  "amazon.in",
+  "gsmarena.com",
+  "91mobiles.com",
+  "ndtv.com",
+  "theverge.com",
+  "techradar.com",
+];
+
+async function serpApiSearch(q, key, num = 6) {
+  if (!key) return [];
+  const url = `https://serpapi.com/search.json?engine=google&q=${encodeURIComponent(q)}&gl=in&hl=en&num=${num}&api_key=${encodeURIComponent(
+    key
   )}`;
   const res = await fetch(url);
   if (!res.ok) {
-    console.warn("SerpAPI failed:", res.status, await res.text().catch(() => ""));
+    console.warn("SerpAPI fetch failed", res.status);
     return [];
   }
-  const j = await res.json();
+  const j = await res.json().catch(() => ({}));
   const hits = (j.organic_results || []).map((r) => ({
     title: r.title || r.link || "",
     link: r.link || r.displayed_link || "",
     snippet: r.snippet || (r.rich_snippet?.top?.extensions || []).join(" ") || "",
   }));
-  // Deduplicate links
+  // dedupe and return
   const uniq = [];
   const seen = new Set();
   for (const h of hits) {
@@ -39,24 +51,21 @@ async function serpApiSearch(query, serpKey, num = 6) {
     if (seen.has(h.link)) continue;
     seen.add(h.link);
     uniq.push(h);
-    if (uniq.length >= num) break;
   }
   return uniq;
 }
 
-function officialDomainScore(link = "") {
-  const domainSignals = [
-    "apple.com",
-    "flipkart.com",
-    "amazon.in",
-    "gsmarena.com",
-    "91mobiles.com",
-    "ndtv.com",
-    "theverge.com",
-    "techradar.com",
-  ];
+function isTrusted(link = "") {
   const l = (link || "").toLowerCase();
-  return domainSignals.some((d) => l.includes(d));
+  return TRUSTED_DOMAINS.some((d) => l.includes(d));
+}
+
+function safeJSONParse(s) {
+  try {
+    return JSON.parse(s);
+  } catch (e) {
+    return null;
+  }
 }
 
 export async function POST(req) {
@@ -64,116 +73,157 @@ export async function POST(req) {
     const body = await req.json().catch(() => ({}));
     const topic = (body?.topic || "").toString().trim();
     if (!topic) {
-      return new Response(JSON.stringify({ error: "Missing 'topic' in request body." }), {
-        status: 400,
-        headers: { "Content-Type": "application/json" },
-      });
+      return new Response(JSON.stringify({ error: "Missing topic" }), { status: 400, headers: { "Content-Type": "application/json" } });
     }
 
     if (!process.env.OPENAI_API_KEY) {
       return new Response(JSON.stringify({ error: "OPENAI_API_KEY not set" }), { status: 500, headers: { "Content-Type": "application/json" } });
     }
 
+    const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
     const serpKey = process.env.SERPAPI_KEY || "";
-    let sources = [];
-    let note = "";
 
-    // If SERPAPI_KEY present, try to collect authoritative snippets
-    if (serpKey) {
-      // Build a focused query that favors official retailers / Apple India and trusted review sites
-      const focusedQuery = `${topic} site:apple.com OR site:flipkart.com OR site:amazon.in OR site:gsmarena.com OR site:91mobiles.com`;
-      try {
-        const hits = await serpApiSearch(focusedQuery, serpKey, 6);
-        // If we didn't get useful hits from the focused query, fall back to generic query
-        if (!hits || hits.length === 0) {
-          const fallbackHits = await serpApiSearch(topic, serpKey, 6);
-          sources = fallbackHits;
-        } else {
-          sources = hits;
-        }
-      } catch (err) {
-        console.warn("SerpAPI search error:", err?.message ?? err);
-        sources = [];
-      }
-      if (sources.length === 0) {
-        note = "No web sources found for this topic (SerpAPI returned no hits). Generation will proceed without live verification.";
-      }
-    } else {
-      // No SERPAPI_KEY provided
-      note = "SERPAPI_KEY not set — generation will run without live web verification. Add SERPAPI_KEY in Vercel to enable live checks.";
-    }
-
-    // Build a context string from collected sources (if any)
-    const sourcesText = (sources || [])
-      .map((s, i) => `${i + 1}. ${s.title}\n${s.link}\n${s.snippet || ""}`)
-      .join("\n\n");
-
-    const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-
-    // Strong system prompt: must use only provided sources, do not hallucinate
-    const sysPrompt = `
-You are a careful, factual article writer for a public-facing blog. You must only use the provided web snippets and links when producing factual claims.
-- If the required fact (e.g., release date, availability) is not present in the provided sources, explicitly say "I could not verify this fact" rather than inventing it.
-- At the end include a "Sources" section listing the exact URLs used.
-- Produce a clear, neutral, buyer-friendly article for the topic below.
-- If no sources are provided, say so and provide a cautious general answer, marking uncertain claims with "I could not verify".
-- Output should be plain text (Markdown is fine).
-Current date: ${new Date().toISOString().slice(0, 10)}.
-`;
-
-    // User prompt: include sources as context
-    const userPromptParts = [
-      `Topic: ${topic}`,
-      "",
-      `Context: The following web search results (titles, links, snippets) were collected for this topic (India-focused). Use them to verify claims and write the article. Do NOT use external facts beyond these snippets unless you explicitly state you could not verify.`,
-      "",
-      sourcesText ? `Sources:\n\n${sourcesText}` : "No web snippets provided.",
-      "",
-      `Requirements:
-- Start with a 2-3 sentence summary.
-- If the topic is about products (phones), list recommended models in India and for each include release month & year if found in sources, short pros/cons, and the specific link(s) you used as evidence.
-- Include a "Sources" section with the clickable URLs.
-- If you cannot verify a fact, write "I could not verify this" for that fact.
-- Tone: factual, neutral.`,
+    // Step 1: ask model for structured candidate products (guarantee JSON output)
+    const now = new Date().toISOString().slice(0, 10);
+    const askCandidates = [
+      {
+        role: "system",
+        content:
+          `You are an assistant that returns a JSON array of recommended products for the requested topic.`
+          + ` Output ONLY valid JSON — an object: { "candidates": [{ "name":"", "short_reason":"" }] } and nothing else.`,
+      },
+      {
+        role: "user",
+        content: `Topic: ${topic}\n\nReturn a JSON object like:\n{ "candidates": [ { "name": "Model name", "short_reason": "one-line reason why this fits the topic (India-specific)"} ] }\n\nKeep suggestions to maximum 8 candidates. Use low creativity — factual suggestions only.`,
+      },
     ];
 
-    const messages = [
-      { role: "system", content: sysPrompt },
-      { role: "user", content: userPromptParts.join("\n") },
-    ];
-
-    // Call the model (single completion, low temperature)
-    const completion = await client.chat.completions.create({
+    const candidateResp = await openai.chat.completions.create({
       model: "gpt-4o-mini",
-      messages,
-      max_tokens: 2000,
+      messages: askCandidates,
+      max_tokens: 800,
       temperature: 0.0,
     });
 
-    const rawOutput = completion?.choices?.[0]?.message?.content ?? completion?.choices?.[0]?.text ?? "";
+    const candidateRaw = candidateResp?.choices?.[0]?.message?.content ?? candidateResp?.choices?.[0]?.text ?? "";
+    let parsed = safeJSONParse(candidateRaw.trim());
+    if (!parsed) {
+      // try to extract JSON braces block
+      const bStart = candidateRaw.indexOf("{");
+      const bEnd = candidateRaw.lastIndexOf("}");
+      if (bStart !== -1 && bEnd !== -1 && bEnd > bStart) {
+        parsed = safeJSONParse(candidateRaw.slice(bStart, bEnd + 1));
+      }
+    }
+    if (!parsed || !Array.isArray(parsed.candidates)) {
+      // failed to get structured candidates — fallback: return error
+      return new Response(JSON.stringify({ error: "Failed to parse candidate list from model. Try again." }), {
+        status: 500,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
 
-    // Build verification summary: mark as "official" if at least one official domain matched
-    const hasOfficial = (sources || []).some((s) => officialDomainScore(s.link));
-    const verificationSummary = {
-      verifiedBySearch: hasOfficial,
-      sourcesCount: sources.length,
-      note,
-    };
+    const candidates = parsed.candidates.slice(0, 8);
 
-    // Return the article text plus the sources we collected and a small verification summary
+    // Step 2: For each candidate, run focused searches and collect sources
+    const verification = {}; // name -> { sources: [], trustedCount, allHits }
+    for (const c of candidates) {
+      const name = (c.name || "").toString();
+      if (!name) continue;
+      // queries: <name> India release date, <name> India price, <name> specs India
+      const queries = [
+        `${name} India release date`,
+        `${name} India price`,
+        `${name} specs`,
+      ];
+      let hits = [];
+      if (serpKey) {
+        for (const q of queries) {
+          const r = await serpApiSearch(q, serpKey, 6).catch(() => []);
+          for (const h of r) {
+            if (!hits.find((x) => x.link === h.link)) hits.push(h);
+          }
+        }
+      }
+      // count trusted hits
+      const trustedHits = hits.filter((h) => isTrusted(h.link));
+      verification[name] = {
+        name,
+        short_reason: c.short_reason || "",
+        sources: hits,
+        trustedCount: trustedHits.length,
+      };
+    }
+
+    // Step 3: filter candidates to only those with at least 1 trusted source
+    const VERIFIED_THRESHOLD = 1; // require at least one trusted link (adjustable)
+    const verifiedCandidates = candidates.filter((c) => {
+      const v = verification[c.name];
+      return v && v.trustedCount >= VERIFIED_THRESHOLD;
+    });
+
+    // If too few verified candidates (e.g., less than 1/2 of suggested), set needsReview
+    const needsReview = verifiedCandidates.length < Math.max(1, Math.round(candidates.length / 2));
+
+    // Step 4: If we have verified snippets, build a context string and ask model to compose final article using only these snippets
+    let finalArticle = "";
+    const collectedSourcesText = [];
+    if (verifiedCandidates.length > 0) {
+      // create context
+      for (const vc of verifiedCandidates) {
+        const v = verification[vc.name];
+        // prefer trusted hits first
+        const trusted = v.sources.filter((s) => isTrusted(s.link));
+        const chosen = trusted.length ? trusted.slice(0, 3) : v.sources.slice(0, 3);
+        for (const s of chosen) {
+          collectedSourcesText.push(`- ${vc.name} >> ${s.title}\n${s.link}\n${s.snippet || ""}`);
+        }
+      }
+
+      const composeSys = `
+You are a factual writer. Use ONLY the provided source snippets below to write a buyer-friendly article on the requested topic.
+If a fact is not supported by the provided snippets, write "I could not verify this" for that fact.
+Do not invent release dates, prices, or availability.
+Output plain text (Markdown ok). Include a "Sources" section listing the URLs used.
+`;
+
+      const composeUser = [
+        `Topic: ${topic}`,
+        "",
+        `Verified source snippets (use these only):\n${collectedSourcesText.join("\n\n")}`,
+        "",
+        `Requirements:\n- Start with 2-3 sentence summary.\n- For each verified product, provide model name, release month & year (only if present in sources), a short pros/cons, and explicit evidence links.\n- At end include Sources with clickable URLs.`,
+      ].join("\n");
+
+      const finalResp = await openai.chat.completions.create({
+        model: "gpt-4o-mini",
+        messages: [
+          { role: "system", content: composeSys },
+          { role: "user", content: composeUser },
+        ],
+        max_tokens: 2000,
+        temperature: 0.0,
+      });
+
+      finalArticle = finalResp?.choices?.[0]?.message?.content ?? finalResp?.choices?.[0]?.text ?? "";
+    } else {
+      // No verified candidates: do not return a fully confident article. Return model-less cautious summary or ask for human review.
+      finalArticle = `We could not find enough authoritative sources (Apple / Flipkart / Amazon / trusted review sites) for confident recommendations on "${topic}". This item has been flagged for human review.`;
+    }
+
+    // Prepare response
     return new Response(
       JSON.stringify({
-        content: rawOutput,
-        sources: sources || [],
-        verification: verificationSummary,
+        content: finalArticle,
+        candidates,
+        verification,
+        verifiedCandidates: verifiedCandidates.map((c) => c.name),
+        needsReview,
       }),
       { status: 200, headers: { "Content-Type": "application/json" } }
     );
   } catch (err) {
-    console.error("Route error:", err);
-    return new Response(JSON.stringify({ error: err?.message ?? String(err) }), {
-      status: 500,
-      headers: { "Content-Type": "application/json" },
-    });
+    console.error("Generate route error:", err);
+    return new Response(JSON.stringify({ error: err?.message ?? String(err) }), { status: 500, headers: { "Content-Type": "application/json" } });
   }
 }
