@@ -1,24 +1,157 @@
-<div style="margin-top:16px;">
-  <button onclick="copyArticle()">Copy to Clipboard</button>
-  <button onclick="downloadMarkdown()">Download .md</button>
-  <button onclick="alert('Export to WordPress coming soon!')">Export to WordPress</button>
-</div>
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Streaming Article Generator</title>
+  <style>
+    body { 
+      font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; 
+      max-width:800px; margin:30px auto; padding:20px; 
+      background:#fafafa;
+    }
+    h1 { font-size: 22px; margin-bottom: 12px; }
+    .controls, .export-bar { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:12px; }
+    button { 
+      padding:8px 14px; border-radius:6px; 
+      border:1px solid #ddd; background:white; cursor:pointer; 
+      font-size:14px; transition:all 0.2s;
+    }
+    button:hover { background:#f0f0f0; }
+    button.primary { background:#0b6cff; color:white; border-color:#0b6cff; }
+    button.primary:hover { background:#0954c9; }
+    #status { margin-bottom:8px; color:#555; font-size:14px; }
+    #output { 
+      border:1px solid #eee; padding:16px; min-height:200px; 
+      white-space:pre-wrap; background:white; border-radius:8px; 
+      box-shadow:0 2px 6px rgba(0,0,0,0.05);
+    }
+    .skeleton { height:12px; background:linear-gradient(90deg,#eee,#f5f5f5,#eee); border-radius:6px; margin:8px 0; animation: shimmer 1.2s linear infinite; }
+    @keyframes shimmer { 0%{background-position:-200px 0} 100%{background-position:200px 0} }
+  </style>
+</head>
+<body>
+  <h1>Streaming Article Generator</h1>
+
+  <!-- Main controls -->
+  <div class="controls">
+    <button id="writeBtn" class="primary">Write Article</button>
+    <button id="pauseBtn" disabled>Pause</button>
+    <button id="regenerateBtn" disabled>Regenerate</button>
+  </div>
+
+  <div id="status">Idle</div>
+  <div id="output"></div>
+
+  <!-- Export options -->
+  <div class="export-bar" style="margin-top:16px;">
+    <button onclick="copyArticle()">Copy to Clipboard</button>
+    <button onclick="downloadMarkdown()">Download .md</button>
+    <button onclick="alert('Export to WordPress coming soon!')">Export to WordPress</button>
+  </div>
 
 <script>
-function copyArticle() {
-  const text = document.getElementById('output').innerText;
-  navigator.clipboard.writeText(text);
-  alert("✅ Article copied to clipboard!");
-}
+(() => {
+  // Simulated paragraphs
+  const paras = [
+    "# The future of remote work\n\n",
+    "Remote work has transformed how companies operate...",
+    "Employees value flexibility, and employers can access global talent pools...",
+    "Productivity tools and async communication have matured...",
+    "However, companies face new challenges: onboarding remotely, measuring outcomes...",
+    "Hybrid models are emerging as a popular compromise...",
+    "Ultimately, remote work isn't just temporary — it's a long-term evolution."
+  ];
 
-function downloadMarkdown() {
-  const text = document.getElementById('output').innerText;
-  const blob = new Blob([text], { type: "text/markdown" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = "article.md";
-  a.click();
-  URL.revokeObjectURL(url);
-}
+  let index = 0, running = false, paused = false, timer = null;
+  const speed = 900; // ms per paragraph
+
+  const writeBtn = document.getElementById('writeBtn');
+  const pauseBtn = document.getElementById('pauseBtn');
+  const regenBtn = document.getElementById('regenerateBtn');
+  const status = document.getElementById('status');
+  const output = document.getElementById('output');
+
+  function updateStatus() {
+    if (!running && index === 0) { status.textContent = 'Idle'; return; }
+    if (running && !paused) { status.textContent = `Generating — ${index}/${paras.length} paragraphs`; }
+    else if (paused) { status.textContent = `Paused — ${index}/${paras.length} paragraphs`; }
+    else { status.textContent = `Finished — ${index}/${paras.length} paragraphs`; }
+  }
+
+  function showSkeleton() {
+    output.innerHTML = '';
+    for (let i=0;i<5;i++) {
+      const s = document.createElement('div');
+      s.className = 'skeleton';
+      s.style.width = `${40 + Math.floor(Math.random()*50)}%`;
+      output.appendChild(s);
+    }
+  }
+
+  function appendChunk(text) {
+    const node = document.createElement('div');
+    node.textContent = text + '\n\n';
+    output.appendChild(node);
+    window.scrollTo(0, document.body.scrollHeight);
+  }
+
+  function startStream() {
+    if (running) return;
+    running = true; paused = false; index = 0;
+    output.innerHTML = ''; showSkeleton();
+    updateStatus(); enableControls();
+    setTimeout(() => { output.innerHTML = ''; pump(); }, 400);
+  }
+
+  function pump() {
+    updateStatus();
+    if (index >= paras.length) { running=false; paused=false; updateStatus(); enableControls(true); return; }
+    if (paused) return;
+    appendChunk(paras[index]); index++; updateStatus();
+    timer = setTimeout(pump, speed + Math.random()*300);
+  }
+
+  function pauseResume() {
+    if (!running) return;
+    paused = !paused;
+    if (paused) { pauseBtn.textContent='Resume'; clearTimeout(timer); }
+    else { pauseBtn.textContent='Pause'; pump(); }
+    updateStatus();
+  }
+
+  function regenerate() {
+    clearTimeout(timer); running=false; paused=false; index=0; output.innerHTML='';
+    enableControls(); startStream();
+  }
+
+  function enableControls(afterFinish=false) {
+    pauseBtn.disabled = !running;
+    regenBtn.disabled = running;
+  }
+
+  // Export functions
+  window.copyArticle = () => {
+    const text = output.innerText;
+    navigator.clipboard.writeText(text);
+    alert("✅ Article copied to clipboard!");
+  };
+
+  window.downloadMarkdown = () => {
+    const text = output.innerText;
+    const blob = new Blob([text], {type:"text/markdown"});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download="article.md"; a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  // Wire events
+  writeBtn.addEventListener('click', () => { startStream(); pauseBtn.textContent='Pause'; });
+  pauseBtn.addEventListener('click', pauseResume);
+  regenBtn.addEventListener('click', regenerate);
+
+  updateStatus(); enableControls(false);
+})();
 </script>
+</body>
+</html>
