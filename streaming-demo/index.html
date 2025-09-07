@@ -1,19 +1,24 @@
-<button id="exportBtn">Export to WordPress</button>
+<div style="margin-top:16px;">
+  <button onclick="copyArticle()">Copy to Clipboard</button>
+  <button onclick="downloadMarkdown()">Download .md</button>
+  <button onclick="alert('Export to WordPress coming soon!')">Export to WordPress</button>
+</div>
 
 <script>
-document.getElementById('exportBtn').onclick = async () => {
-  const title = "My Streamed Article";
-  const content = document.getElementById('output').innerHTML; // take generated HTML
-  const res = await fetch("http://localhost:4000/exportToWP", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ title, content })
-  });
-  const data = await res.json();
-  if (data.success) {
-    alert("✅ Draft created at " + data.postUrl);
-  } else {
-    alert("❌ Failed: " + data.error);
-  }
-};
+function copyArticle() {
+  const text = document.getElementById('output').innerText;
+  navigator.clipboard.writeText(text);
+  alert("✅ Article copied to clipboard!");
+}
+
+function downloadMarkdown() {
+  const text = document.getElementById('output').innerText;
+  const blob = new Blob([text], { type: "text/markdown" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "article.md";
+  a.click();
+  URL.revokeObjectURL(url);
+}
 </script>
