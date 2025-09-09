@@ -26,8 +26,8 @@ export async function POST(req) {
       stream: true,
     });
 
-    // Create a ReadableStream to forward chunks to the browser
     const encoder = new TextEncoder();
+
     const readable = new ReadableStream({
       async start(controller) {
         try {
@@ -39,7 +39,6 @@ export async function POST(req) {
               );
             }
           }
-          // Signal stream is done
           controller.enqueue(encoder.encode("data: [DONE]\n\n"));
           controller.close();
         } catch (err) {
@@ -52,4 +51,14 @@ export async function POST(req) {
       headers: {
         "Content-Type": "text/event-stream",
         "Cache-Control": "no-cache",
-        Con
+        "Connection": "keep-alive",
+      },
+    });
+  } catch (err) {
+    console.error("Streaming error:", err);
+    return NextResponse.json(
+      { error: "server_error", detail: String(err) },
+      { status: 500 }
+    );
+  }
+}
