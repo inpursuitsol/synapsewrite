@@ -1,20 +1,56 @@
-/* fonts & root vars (paste at VERY TOP of app/globals.css) */
+/* === Font imports === */
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700;800&family=Poppins:wght@600;700&display=swap');
 
+/* === CSS variables === */
 :root {
-  --font-heading: "Poppins", Inter, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial;
-  --font-body: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial;
+  --font-heading: "Poppins", Inter, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-body: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+
+  --text-dark: #0f172a; /* slate-900 */
+  --text-light: #475569; /* slate-600 */
+  --bg-light: #f8fafc;  /* slate-50 */
+  --bg-white: #ffffff;
+  --brand: #4f46e5;     /* indigo-600 */
 }
 
-/* global defaults */
+/* === Base reset === */
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
 html, body {
   font-family: var(--font-body);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  background: linear-gradient(180deg, var(--bg-white), var(--bg-light));
+  color: var(--text-dark);
+  line-height: 1.5;
 }
 
-/* optional utility classes if Tailwind doesn't have font utilities configured */
+/* === Utilities === */
 .font-heading { font-family: var(--font-heading); }
 .font-body { font-family: var(--font-body); }
 
-/* keep your existing globals below this line (do not remove them) */
+/* Links */
+a {
+  color: var(--brand);
+  text-decoration: none;
+}
+a:hover {
+  text-decoration: underline;
+}
+
+/* Forms */
+textarea, input {
+  font-family: var(--font-body);
+}
+
+/* Buttons */
+button {
+  font-family: var(--font-body);
+  cursor: pointer;
+}
+
+/* === Keep space for any additional custom global rules below this line === */
