@@ -1,67 +1,128 @@
-<script>
-  const startBtn = document.getElementById("startBtn");
-  const out = document.getElementById("out");
-  const status = document.getElementById("status");
-  const promptEl = document.getElementById("prompt");
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Synapsewrite — Streaming Demo</title>
+    <style>
+      body {
+        font-family: system-ui, sans-serif;
+        max-width: 700px;
+        margin: 2rem auto;
+        padding: 1rem;
+        line-height: 1.5;
+        background: #ffffff;
+        color: #111827;
+      }
+      h1 { color: #111827; margin-bottom: .5rem; }
+      textarea {
+        width: 100%;
+        height: 80px;
+        font-size: 14px;
+        margin-bottom: 1rem;
+        padding: .5rem;
+        border: 1px solid #e5e7eb;
+        border-radius: 6px;
+      }
+      button {
+        padding: 0.6rem 1rem;
+        background: #7c3aed;
+        border: none;
+        border-radius: 6px;
+        color: white;
+        cursor: pointer;
+      }
+      button:disabled { background: #d1d5db; cursor: not-allowed; }
+      #out {
+        margin-top: 1.5rem;
+        padding: 1rem;
+        border: 1px solid #e5e7eb;
+        border-radius: 6px;
+        min-height: 120px;
+        white-space: pre-wrap;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, "Roboto Mono", monospace;
+        background: #fafafa;
+      }
+      #status { margin-left: 1rem; font-size: 14px; color: #6b7280; }
+    </style>
+  </head>
+  <body>
+    <h1>Synapsewrite — Streaming Demo</h1>
+    <p>Prompt</p>
+    <textarea
+      id="prompt"
+      placeholder="Write a 300-400 word blog post on how startups can use AI."
+    ></textarea>
+    <br />
+    <button id="startBtn">Generate (Stream)</button>
+    <span id="status"></span>
 
-  function tryParseJSON(str) {
-    try { return JSON.parse(str); } catch { return null; }
-  }
+    <div id="out"></div>
 
-  startBtn.addEventListener("click", async () => {
-    out.textContent = "";
-    status.textContent = "Connecting...";
-    startBtn.disabled = true;
+    <script>
+      const startBtn = document.getElementById("startBtn");
+      const out = document.getElementById("out");
+      const status = document.getElementById("status");
+      const promptEl = document.getElementById("prompt");
 
-    // Provide a sensible default if user left prompt empty
-    const promptValue = (promptEl.value || "").trim() || 
-      "Write a 200-word helpful blog post on how early-stage startups can adopt AI quickly and ethically.";
-
-    try {
-      const resp = await fetch("/api/stream", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ prompt: promptValue }),
-      });
-
-      if (!resp.ok) {
-        out.textContent = "Server error: " + (await resp.text());
-        status.textContent = "Error";
-        startBtn.disabled = false;
-        return;
+      function tryParseJSON(str) {
+        try { return JSON.parse(str); } catch { return null; }
       }
 
-      const reader = resp.body.getReader();
-      const decoder = new TextDecoder("utf-8");
+      startBtn.addEventListener("click", async () => {
+        out.textContent = "";
+        status.textContent = "Connecting...";
+        startBtn.disabled = true;
 
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        const chunk = decoder.decode(value, { stream: true });
+        const promptValue = (promptEl.value || "").trim() ||
+          "Write a 200-word helpful blog post on how early-stage startups can adopt AI quickly and ethically.";
 
-        chunk
-          .split("\n")
-          .filter((line) => line.startsWith("data:"))
-          .forEach((line) => {
-            const data = line.replace(/^data:\s*/, "");
-            if (data === "[DONE]") {
-              status.textContent = "Finished";
-              startBtn.disabled = false;
-              return;
-            }
-            const parsed = tryParseJSON(data);
-            if (parsed?.text) {
-              out.textContent += parsed.text;
-            }
+        try {
+          const resp = await fetch("/api/stream", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ prompt: promptValue }),
           });
-      }
 
-      status.textContent = "Finished";
-    } catch (err) {
-      out.textContent = "Request failed: " + err;
-      status.textContent = "Error";
-    } finally {
-      startBtn.disabled = false;
-    }
-  });
-</script>
+          if (!resp.ok) {
+            out.textContent = "Server error: " + (await resp.text());
+            status.textContent = "Error";
+            startBtn.disabled = false;
+            return;
+          }
+
+          const reader = resp.body.getReader();
+          const decoder = new TextDecoder("utf-8");
+
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            const chunk = decoder.decode(value, { stream: true });
+
+            chunk
+              .split("\n")
+              .filter((line) => line.startsWith("data:"))
+              .forEach((line) => {
+                const data = line.replace(/^data:\s*/, "");
+                if (data === "[DONE]") {
+                  status.textContent = "Finished";
+                  startBtn.disabled = false;
+                  return;
+                }
+                const parsed = tryParseJSON(data);
+                if (parsed?.text) {
+                  out.textContent += parsed.text;
+                }
+              });
+          }
+
+          status.textContent = "Finished";
+        } catch (err) {
+          out.textContent = "Request failed: " + err;
+          status.textContent = "Error";
+        } finally {
+          startBtn.disabled = false;
+        }
+      });
+    </script>
+  </body>
+</html>
