@@ -60,9 +60,13 @@ export default function StreamingPage() {
               const parsed = JSON.parse(data);
               if (parsed?.text) {
                 setOutput((o) => o + parsed.text);
+              } else {
+                // handle generic text fields or raw text events
+                if (typeof parsed === "string") setOutput((o) => o + parsed);
               }
             } catch (e) {
-              // ignore parse errors
+              // not JSON — append raw text (safe fallback)
+              setOutput((o) => o + data);
             }
           });
       }
