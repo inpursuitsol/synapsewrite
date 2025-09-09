@@ -1,0 +1,106 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Synapsewrite — Streaming Demo</title>
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <style>
+      body { font-family: Inter, system-ui, -apple-system, sans-serif; padding: 24px; }
+      button { padding: 10px 14px; border-radius: 8px; border: none; background: #6b21a8; color: white; cursor: pointer; }
+      pre { margin-top: 18px; white-space: pre-wrap; background:#f7f7f7; padding:12px; border-radius:8px; min-height:200px; }
+      .muted { color: #666; margin-top: 8px; font-size: 14px; }
+    </style>
+  </head>
+  <body>
+    <h1>Synapsewrite — Streaming Demo</h1>
+
+    <div>
+      <label for="prompt">Prompt</label><br />
+      <textarea id="prompt" rows="3" style="width:100%;margin-top:6px;padding:8px;" placeholder="Write a 300-word blog post on using AI in startups.">Write a 300-400 word blog post on how startups can use AI.</textarea>
+    </div>
+
+    <div style="margin-top:12px;">
+      <button id="startBtn">Generate (Stream)</button>
+      <span class="muted" id="status">Idle</span>
+    </div>
+
+    <pre id="out">Press Generate to start streaming...</pre>
+
+    <script>
+      const startBtn = document.getElementById('startBtn');
+      const out = document.getElementById('out');
+      const status = document.getElementById('status');
+      const promptEl = document.getElementById('prompt');
+
+      startBtn.addEventListener('click', async () => {
+        out.textContent = '';
+        status.textContent = 'Connecting...';
+        startBtn.disabled = true;
+
+        try {
+          const resp = await fetch('/api/stream', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ prompt: promptEl.value })
+          });
+
+          if (!resp.ok) {
+            const txt = await resp.text();
+            out.textContent = 'Server error: ' + txt;
+            status.textContent = 'Error';
+            startBtn.disabled = false;
+            return;
+          }
+
+          if (!resp.body) {
+            out.textContent = 'No streaming body in response. Check server logs or OPENAI_API_KEY.';
+            status.textContent = 'No stream';
+            startBtn.disabled = false;
+            return;
+          }
+
+          status.textContent = 'Streaming…';
+          const reader = resp.body.getReader();
+          const decoder = new TextDecoder();
+          let buffer = '';
+
+          while (true) {
+            const { value, done } = await reader.read();
+            if (done) break;
+            buffer += decoder.decode(value, { stream: true });
+
+            const parts = buffer.split('\\n\\n');
+            buffer = parts.pop();
+
+            for (const part of parts) {
+              const line = part.trim();
+              if (!line) continue;
+              if (!line.startsWith('data:')) continue;
+              const payload = line.replace(/^data:\\s*/, '');
+              if (payload === '[DONE]') {
+                status.textContent = 'Done';
+                startBtn.disabled = false;
+                return;
+              }
+              try {
+                const obj = JSON.parse(payload);
+                if (obj.text) out.textContent += obj.text;
+                else if (obj.raw) out.textContent += obj.raw;
+              } catch (e) {
+                out.textContent += payload;
+              }
+            }
+          }
+
+          status.textContent = 'Finished';
+        } catch (err) {
+          console.error(err);
+          out.textContent = '\\n\\n[Error connecting to stream]\\n' + err;
+          status.textContent = 'Error';
+        } finally {
+          startBtn.disabled = false;
+        }
+      });
+    </script>
+  </body>
+</html>
