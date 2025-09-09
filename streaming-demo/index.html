@@ -1,171 +1,121 @@
-<!DOCTYPE html>
+<!doctype html>
 <html>
-<head>
-  <meta charset="utf-8" />
-  <title>Streaming Article Generator — Export to WordPress</title>
-  <style>
-    body { font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; max-width:900px; margin:28px auto; padding:18px; background:#fafafa; }
-    h1 { font-size:20px; margin-bottom:8px; }
-    .controls, .export-bar { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:12px; }
-    button { padding:8px 14px; border-radius:6px; border:1px solid #ddd; background:white; cursor:pointer; font-size:14px; }
-    button.primary { background:#0b6cff; color:white; border-color:#0b6cff; }
-    #status { margin-bottom:8px; color:#444; }
-    #output { border:1px solid #eee; padding:14px; min-height:180px; white-space:pre-wrap; background:white; border-radius:8px; box-shadow:0 2px 6px rgba(0,0,0,0.04); }
-  </style>
-</head>
-<body>
-  <h1>Streaming Article Generator</h1>
+  <head>
+    <meta charset="utf-8" />
+    <title>Synapsewrite — Streaming Demo (static)</title>
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <style>
+      body { font-family: Inter, system-ui, -apple-system, sans-serif; padding: 24px; }
+      button { padding: 10px 14px; border-radius: 8px; border: none; background: #6b21a8; color: white; cursor: pointer; }
+      pre { margin-top: 18px; white-space: pre-wrap; background:#f7f7f7; padding:12px; border-radius:8px; min-height:200px; }
+      .muted { color: #666; margin-top: 8px; font-size: 14px; }
+    </style>
+  </head>
+  <body>
+    <h1>Synapsewrite — Streaming Demo (static)</h1>
 
-  <div class="controls">
-    <button id="writeBtn" class="primary">Write Article</button>
-    <button id="pauseBtn" disabled>Pause</button>
-    <button id="regenerateBtn" disabled>Regenerate</button>
-  </div>
+    <div>
+      <label for="prompt">Prompt</label><br />
+      <textarea id="prompt" rows="3" style="width:100%;margin-top:6px;padding:8px;" placeholder="Write a 300-word blog post on using AI in startups.">Write a 300-400 word blog post on how startups can use AI.</textarea>
+    </div>
 
-  <div id="status">Idle</div>
-  <div id="output"></div>
+    <div style="margin-top:12px;">
+      <button id="startBtn">Generate (Stream)</button>
+      <span class="muted" id="status">Idle</span>
+    </div>
 
-  <div class="export-bar" style="margin-top:14px;">
-    <button id="copyBtn">Copy to Clipboard</button>
-    <button id="downloadBtn">Download .md</button>
-    <button id="exportBtn">Export to WordPress</button>
-  </div>
+    <pre id="out">Press Generate to start streaming...</pre>
 
-<script>
-(() => {
-  // Simulated paragraphs (replace with real stream later)
-  const paras = [
-    "# The future of remote work\n\n",
-    "Remote work has transformed how companies operate...",
-    "Employees value flexibility, and employers can access global talent pools...",
-    "Productivity tools and async communication have matured...",
-    "However, companies face new challenges: onboarding remotely, measuring outcomes...",
-    "Hybrid models are emerging as a popular compromise...",
-    "Ultimately, remote work is a long-term evolution."
-  ];
+    <script>
+      const startBtn = document.getElementById('startBtn');
+      const out = document.getElementById('out');
+      const status = document.getElementById('status');
+      const promptEl = document.getElementById('prompt');
 
-  let index = 0, running=false, paused=false, timer=null;
-  const speed = 900;
+      startBtn.addEventListener('click', async () => {
+        out.textContent = '';
+        status.textContent = 'Connecting...';
+        startBtn.disabled = true;
 
-  const writeBtn = document.getElementById('writeBtn');
-  const pauseBtn = document.getElementById('pauseBtn');
-  const regenBtn = document.getElementById('regenerateBtn');
-  const status = document.getElementById('status');
-  const output = document.getElementById('output');
+        try {
+          const resp = await fetch('/api/stream', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ prompt: promptEl.value })
+          });
 
-  function updateStatus() {
-    if (!running && index === 0) return status.textContent = 'Idle';
-    if (running && !paused) return status.textContent = `Generating — ${index}/${paras.length} paragraphs`;
-    if (paused) return status.textContent = `Paused — ${index}/${paras.length} paragraphs`;
-    status.textContent = `Finished — ${index}/${paras.length} paragraphs`;
-  }
+          if (!resp.ok) {
+            const txt = await resp.text();
+            out.textContent = 'Server error: ' + txt;
+            status.textContent = 'Error';
+            startBtn.disabled = false;
+            return;
+          }
 
-  function showSkeleton() {
-    output.innerHTML = '';
-    for (let i=0;i<5;i++){
-      const s = document.createElement('div');
-      s.style.height = '12px';
-      s.style.margin = '8px 0';
-      s.style.background = 'linear-gradient(90deg,#eee,#f5f5f5,#eee)';
-      s.style.borderRadius = '6px';
-      output.appendChild(s);
-    }
-  }
+          if (!resp.body) {
+            out.textContent = 'No streaming body in response. Check server logs or OPENAI_API_KEY.';
+            status.textContent = 'No stream';
+            startBtn.disabled = false;
+            return;
+          }
 
-  function appendChunk(text) {
-    const node = document.createElement('div');
-    node.textContent = text + '\n\n';
-    output.appendChild(node);
-    window.scrollTo(0,document.body.scrollHeight);
-  }
+          status.textContent = 'Streaming…';
+          const reader = resp.body.getReader();
+          const decoder = new TextDecoder();
+          let buffer = '';
 
-  function startStream() {
-    if (running) return;
-    running=true; paused=false; index=0;
-    output.innerHTML=''; showSkeleton(); updateStatus();
-    pauseBtn.disabled=false; regenBtn.disabled=true;
-    setTimeout(()=>{ output.innerHTML=''; pump(); }, 350);
-  }
+          while (true) {
+            const { value, done } = await reader.read();
+            if (done) break;
+            buffer += decoder.decode(value, { stream: true });
 
-  function pump() {
-    updateStatus();
-    if (index >= paras.length) {
-      running=false; paused=false; updateStatus();
-      pauseBtn.disabled=true; regenBtn.disabled=false;
-      return;
-    }
-    if (paused) return;
-    appendChunk(paras[index]); index++;
-    timer = setTimeout(pump, speed + Math.random()*350);
-  }
+            // Process SSE-like "data: {...}\n\n" events
+            const parts = buffer.split('\\n\\n');
+            buffer = parts.pop(); // last chunk might be partial
 
-  function pauseResume() {
-    if (!running) return;
-    paused = !paused;
-    pauseBtn.textContent = paused ? 'Resume' : 'Pause';
-    if (!paused) pump();
-    updateStatus();
-  }
+            for (const part of parts) {
+              const line = part.trim();
+              if (!line) continue;
+              if (!line.startsWith('data:')) continue;
+              const payload = line.replace(/^data:\\s*/, '');
+              if (payload === '[DONE]') {
+                status.textContent = 'Done';
+                startBtn.disabled = false;
+                return;
+              }
+              try {
+                const obj = JSON.parse(payload);
+                if (obj.text) out.textContent += obj.text;
+                else if (obj.raw) out.textContent += obj.raw;
+              } catch (e) {
+                // append raw payload if parsing fails
+                out.textContent += payload;
+              }
+            }
+          }
 
-  function regenerate() {
-    clearTimeout(timer);
-    running=false; paused=false; index=0; output.innerHTML='';
-    pauseBtn.disabled=true; regenBtn.disabled=true;
-    startStream();
-  }
+          // flush any remaining buffer
+          if (buffer && buffer.trim()) {
+            const m = buffer.match(/^data:\\s*(.*)$/s);
+            if (m && m[1] !== '[DONE]') {
+              try {
+                const obj = JSON.parse(m[1]);
+                if (obj.text) out.textContent += obj.text;
+              } catch (e) {
+                out.textContent += m[1];
+              }
+            }
+          }
 
-  writeBtn.addEventListener('click', ()=>{ startStream(); pauseBtn.textContent='Pause'; });
-  pauseBtn.addEventListener('click', pauseResume);
-  regenBtn.addEventListener('click', regenerate);
-
-  // Export helpers
-  document.getElementById('copyBtn').addEventListener('click', async ()=> {
-    try {
-      await navigator.clipboard.writeText(output.innerText || '');
-      alert('✅ Copied to clipboard');
-    } catch(e){ alert('Copy failed: ' + e.message); }
-  });
-  document.getElementById('downloadBtn').addEventListener('click', ()=> {
-    const text = output.innerText || '';
-    const blob = new Blob([text], {type:'text/markdown'});
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a'); a.href=url; a.download='article.md'; a.click(); URL.revokeObjectURL(url);
-  });
-
-  // Export to WordPress
-  document.getElementById('exportBtn').addEventListener('click', async ()=> {
-    const title = prompt('Post title (what should we call this draft?)', 'My Streamed Article');
-    if (!title) return alert('Export canceled: title required.');
-
-    const content = output.innerHTML || '<p>(empty)</p>'; // HTML content to send to WP
-    try {
-      const res = await fetch('http://localhost:3000/exportToWP', {
-        method: 'POST',
-        headers: {'Content-Type':'application/json'},
-        body: JSON.stringify({ title, content })
-      });
-      const data = await res.json();
-      if (!res.ok || !data.success) {
-        console.error(data);
-        return alert('Export failed: ' + (data.error || JSON.stringify(data)));
-      }
-      if (data.editUrl) {
-        if (confirm('✅ Draft created. Open draft in WordPress?')) {
-          window.open(data.editUrl, '_blank');
-        } else {
-          alert('Draft created: ' + data.editUrl);
+          status.textContent = 'Finished';
+        } catch (err) {
+          console.error(err);
+          out.textContent = '\\n\\n[Error connecting to stream]\\n' + err;
+          status.textContent = 'Error';
+        } finally {
+          startBtn.disabled = false;
         }
-      } else {
-        alert('Draft created (post id: ' + data.postId + ')');
-      }
-    } catch (err) {
-      console.error(err);
-      alert('Export failed: ' + err.message);
-    }
-  });
-
-  updateStatus();
-})();
-</script>
-</body>
+      });
+    </script>
+  </body>
 </html>
