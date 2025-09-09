@@ -1,3 +1,4 @@
+// preview-branch: feat/streaming - test commit
 // app/api/stream/route.js
 import { NextResponse } from "next/server";
 
@@ -119,3 +120,4 @@ export async function POST(req) {
     return NextResponse.json({ error: "server_error", detail: String(err) }, { status: 500 });
   }
 }
+chore: mark preview branch
