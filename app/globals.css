@@ -1,56 +1,63 @@
-/* === Font imports === */
+/* app/globals.css
+   FULL file — paste/replace the existing file with this content
+*/
+
+/* 1) Fonts (Google) */
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700;800&family=Poppins:wght@600;700&display=swap');
 
-/* === CSS variables === */
+/* 2) Tailwind directives (must be present for tailwind to work) */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* 3) CSS variables & font setup */
 :root {
   --font-heading: "Poppins", Inter, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   --font-body: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
 
   --text-dark: #0f172a; /* slate-900 */
-  --text-light: #475569; /* slate-600 */
-  --bg-light: #f8fafc;  /* slate-50 */
-  --bg-white: #ffffff;
-  --brand: #4f46e5;     /* indigo-600 */
+  --text-muted: #64748b; /* slate-500 */
+  --bg-page: #fbfdff;    /* very light */
+  --brand: #4f46e5;      /* indigo-600 */
 }
 
-/* === Base reset === */
+/* 4) Base reset & sensible defaults */
 * {
-  margin: 0;
-  padding: 0;
   box-sizing: border-box;
 }
 
 html, body {
+  height: 100%;
+  margin: 0;
+  padding: 0;
   font-family: var(--font-body);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  background: linear-gradient(180deg, var(--bg-white), var(--bg-light));
+  background: linear-gradient(180deg, #fff, var(--bg-page));
   color: var(--text-dark);
-  line-height: 1.5;
 }
 
-/* === Utilities === */
-.font-heading { font-family: var(--font-heading); }
-.font-body { font-family: var(--font-body); }
-
-/* Links */
-a {
-  color: var(--brand);
-  text-decoration: none;
-}
-a:hover {
-  text-decoration: underline;
+/* Ensure root scroll area uses bg */
+#__next, #root {
+  min-height: 100vh;
 }
 
-/* Forms */
-textarea, input {
-  font-family: var(--font-body);
-}
+/* 5) Small utility classes (fallback if tailwind isn't applied immediately) */
+.font-heading { font-family: var(--font-heading) !important; }
+.font-body    { font-family: var(--font-body) !important; }
 
-/* Buttons */
+/* Button baseline (Tailwind will override once loaded) */
 button {
   font-family: var(--font-body);
-  cursor: pointer;
 }
 
-/* === Keep space for any additional custom global rules below this line === */
+/* Ensure forms inherit fonts */
+input, textarea, select, button {
+  font-family: var(--font-body);
+}
+
+/* 6) Tiny visual helpers */
+a { color: var(--brand); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+/* 7) Add any additional custom global CSS below */
