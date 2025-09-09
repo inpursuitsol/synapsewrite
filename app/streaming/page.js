@@ -16,7 +16,7 @@ export default function StreamingPage() {
     setStatus("Connecting…");
     setLoading(true);
 
-    // Abort any previous request
+    // Abort previous request if any
     if (controllerRef.current) controllerRef.current.abort();
     const controller = new AbortController();
     controllerRef.current = controller;
@@ -69,7 +69,7 @@ export default function StreamingPage() {
 
       setStatus("Finished");
     } catch (err) {
-      if (err.name === "AbortError") {
+      if (err?.name === "AbortError") {
         setStatus("Canceled");
       } else {
         setOutput("Request failed: " + (err?.message || String(err)));
