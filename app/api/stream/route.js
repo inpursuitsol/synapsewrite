@@ -1,107 +1,170 @@
-export const dynamic = "force-dynamic";
+// app/api/stream/route.js
+import { NextResponse } from "next/server";
 
-import { NextResponse } from 'next/server';
+/**
+ * Simple SSE -> plain-text proxy for OpenAI streaming responses.
+ *
+ * Accepts POST { prompt, maxTokens? } from the client.
+ * Calls OpenAI (streaming) and forwards only the assistant text (delta.content)
+ * to the client as plain text chunks (no "data: {...}" wrappers).
+ *
+ * Requirements:
+ *   - Set process.env.OPENAI_API_KEY
+ *
+ * Notes:
+ *   - This implementation is intentionally minimal and safe for small traffic.
+ *   - For production, add rate-limiting, auth, logging, and retry behavior.
+ */
 
-const OPENAI_BASE = 'https://api.openai.com/v1/chat/completions';
-const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-4o-mini';
-
-// Simple SerpAPI fetch (basic evidence)
-async function fetchSerpEvidence(query) {
-  const API_KEY = process.env.SERPAPI_KEY;
-  if (!API_KEY) return null;
-  try {
-    const url = `https://serpapi.com/search.json?q=${encodeURIComponent(query)}&gl=IN&hl=en&num=6&api_key=${API_KEY}`;
-    const r = await fetch(url);
-    if (!r.ok) return null;
-    const j = await r.json();
-    if (!Array.isArray(j.organic_results)) return null;
-
-    const results = j.organic_results.slice(0, 5).map(r => ({
-      title: r.title,
-      snippet: r.snippet,
-      link: r.link
-    }));
-
-    const summary = results.map(r => r.snippet).filter(Boolean).join('\n\n');
-    return { summary, confidence: 80, sources: results.map(r => r.link) };
-  } catch {
-    return null;
-  }
-}
+const OPENAI_URL = "https://api.openai.com/v1/chat/completions";
+const OPENAI_MODEL = "gpt-4o-mini-2024-07-18"; // adjust if you use another model
 
 export async function POST(req) {
   try {
-    const body = await req.json();
-    const prompt = (body.prompt || '').toString().trim();
-    if (!prompt) return NextResponse.json({ error: 'Missing prompt' }, { status: 400 });
-
-    let evidence = null;
-    if (process.env.SERPAPI_KEY) {
-      evidence = await fetchSerpEvidence(prompt);
+    const body = await req.json().catch(() => ({}));
+    const prompt = body.prompt || "";
+    const maxTokens = body.maxTokens || 800;
+    if (!prompt || !process.env.OPENAI_API_KEY) {
+      return NextResponse.json({ error: "Missing prompt or OPENAI_API_KEY" }, { status: 400 });
     }
 
-    // 🔑 Fixed: clean SEO JSON block, no "json" leaks
-    const systemMessage = {
-      role: 'system',
-      content:
-        'You are a professional content writer. ' +
-        'At the VERY START of your response, output ONLY a single JSON object wrapped between <!--SEO_START and SEO_END--> (each marker on its own line). ' +
-        'Do NOT label it with words like json, code, or backticks. ' +
-        'The JSON must have keys: "title", "meta", "confidence", "sources". ' +
-        'After SEO_END-->, immediately begin a polished article: short title, 2–4 sentence introduction, clear paragraphs, and conclusion. ' +
-        'Avoid long numbered lists unless the user explicitly asks. ' +
-        (evidence
-          ? `EVIDENCE (confidence ${evidence.confidence}%):\n${evidence.summary}\n\nSources:\n${evidence.sources.join('\n')}`
-          : 'No live evidence available — rely on general knowledge only.')
+    // Build the OpenAI chat request. Keep temperature low for consistent prose.
+    const openaiReqBody = {
+      model: OPENAI_MODEL,
+      // Messages: adjust system/instruction as per your pipeline.
+      messages: [
+        { role: "system", content: "You are a helpful assistant that outputs a clean article followed by a final SEO JSON block. Do NOT output markdown fences or labels. Final block must be valid JSON." },
+        { role: "user", content: prompt },
+      ],
+      max_tokens: maxTokens,
+      temperature: 0.2,
+      stream: true,
     };
 
-    const messages = [systemMessage, { role: 'user', content: prompt }];
-
-    const openaiRes = await fetch(OPENAI_BASE, {
-      method: 'POST',
+    const openaiRes = await fetch(OPENAI_URL, {
+      method: "POST",
       headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${process.env.OPENAI_API_KEY}`
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
       },
-      body: JSON.stringify({
-        model: OPENAI_MODEL,
-        messages,
-        temperature: 0.2,
-        top_p: 0.9,
-        max_tokens: 900,
-        stream: true
-      })
+      body: JSON.stringify(openaiReqBody),
     });
 
     if (!openaiRes.ok) {
-      const text = await openaiRes.text();
-      return NextResponse.json({ error: 'OpenAI API error', detail: text }, { status: 500 });
+      const errTxt = await openaiRes.text();
+      return NextResponse.json({ error: "OpenAI error", detail: errTxt }, { status: 502 });
     }
 
+    // We'll read OpenAI's SSE stream and forward only the assistant "content" text.
+    const reader = openaiRes.body.getReader();
+    const decoder = new TextDecoder("utf-8");
+
+    // This ReadableStream is what we return to the client.
     const stream = new ReadableStream({
       async start(controller) {
-        const reader = openaiRes.body.getReader();
+        let buffer = ""; // accumulate raw SSE text fragments
         try {
           while (true) {
-            const { done, value } = await reader.read();
+            const { value, done } = await reader.read();
             if (done) break;
-            controller.enqueue(value);
+            buffer += decoder.decode(value, { stream: true });
+
+            // Split by newline - incoming data from OpenAI is SSE lines that begin with "data: "
+            const lines = buffer.split(/\r?\n/);
+            // Keep the last partial line in buffer
+            buffer = lines.pop();
+
+            for (let line of lines) {
+              line = line.trim();
+              if (!line) continue;
+
+              // OpenAI SSE lines are of the form: data: {...}
+              if (!line.startsWith("data:")) continue;
+              const payload = line.replace(/^data:\s*/, "");
+
+              // End of stream marker
+              if (payload === "[DONE]") {
+                controller.close();
+                return;
+              }
+
+              // Parse JSON - each chunk is a chat.completion.chunk
+              let parsed;
+              try {
+                parsed = JSON.parse(payload);
+              } catch (e) {
+                // ignore lines we can't parse
+                continue;
+              }
+
+              // Extract assistant delta content (if present)
+              try {
+                const choices = parsed.choices || [];
+                if (choices.length > 0) {
+                  const delta = choices[0].delta || {};
+                  const text = delta.content || ""; // main streaming text
+                  if (text) {
+                    // enqueue plain text (no wrappers)
+                    controller.enqueue(new TextEncoder().encode(text));
+                  }
+                }
+              } catch (e) {
+                // ignore individual parsing errors
+              }
+            }
           }
+
+          // If we exit loop normally, flush any leftover buffer lines
+          if (buffer) {
+            const leftover = buffer.trim();
+            if (leftover && leftover.startsWith("data:")) {
+              const payload = leftover.replace(/^data:\s*/, "");
+              if (payload !== "[DONE]") {
+                try {
+                  const parsed = JSON.parse(payload);
+                  const choices = parsed.choices || [];
+                  if (choices.length > 0) {
+                    const delta = choices[0].delta || {};
+                    const text = delta.content || "";
+                    if (text) controller.enqueue(new TextEncoder().encode(text));
+                  }
+                } catch (e) {
+                  // ignore
+                }
+              }
+            }
+          }
+
           controller.close();
-        } catch (err) {
-          controller.error(err);
+        } catch (error) {
+          // If anything goes wrong, error the stream so the client sees a failure.
+          try {
+            controller.error(error);
+          } catch (e) {
+            /* ignore */
+          }
+        } finally {
+          try {
+            reader.releaseLock();
+          } catch (e) {}
         }
-      }
+      },
+      cancel(reason) {
+        // client cancelled - nothing special to do here
+      },
     });
 
+    // Return the stream with plain text content-type so client receives readable text chunks
     return new Response(stream, {
+      status: 200,
       headers: {
-        'Content-Type': 'text/event-stream',
-        'Cache-Control': 'no-cache',
-        Connection: 'keep-alive'
-      }
+        "Content-Type": "text/plain; charset=utf-8",
+        // no-cache to avoid proxies holding streaming responses
+        "Cache-Control": "no-cache, no-transform",
+      },
     });
   } catch (err) {
-    return NextResponse.json({ error: 'Server error', detail: err.message }, { status: 500 });
+    console.error("Stream route error:", err);
+    return NextResponse.json({ error: "Internal server error", detail: err.message }, { status: 500 });
   }
 }
