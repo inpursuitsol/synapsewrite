@@ -5,78 +5,94 @@ import { NextResponse } from 'next/server';
 const OPENAI_BASE = 'https://api.openai.com/v1/chat/completions';
 const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-4o-mini';
 
-async function fetchSerpSummary(query) {
-  const key = process.env.SERPAPI_KEY;
-  if (!key) return null;
+/* --- Robust SerpAPI Evidence --- */
+async function fetchSerpEvidence(query, opts = {}) {
+  const API_KEY = process.env.SERPAPI_KEY;
+  if (!API_KEY) return null;
+  const num = opts.numResults || 6;
   try {
-    const url = `https://serpapi.com/search.json?q=${encodeURIComponent(query)}&gl=IN&hl=en&num=5&api_key=${key}`;
+    const url = `https://serpapi.com/search.json?q=${encodeURIComponent(query)}&gl=IN&hl=en&num=${num}&api_key=${API_KEY}`;
     const r = await fetch(url);
     if (!r.ok) return null;
     const j = await r.json();
-    const pieces = [];
-    if (j.knowledge_graph && j.knowledge_graph.description) {
-      pieces.push(`Knowledge: ${j.knowledge_graph.description}`);
-    }
+
+    const results = [];
     if (Array.isArray(j.organic_results)) {
-      for (let i = 0; i < Math.min(4, j.organic_results.length); i++) {
-        const it = j.organic_results[i];
-        const title = it.title || '';
-        const snippet = it.snippet || it.snippet_highlighted_words || '';
-        const src = it.displayed_link || it.link || '';
-        pieces.push(`${i + 1}. ${title}${snippet ? ' — ' + snippet : ''}${src ? ' (' + src + ')' : ''}`);
+      for (const it of j.organic_results.slice(0, num)) {
+        results.push({
+          title: it.title || '',
+          snippet: (it.snippet || '').trim(),
+          link: it.link || '',
+          domain: (it.link || '').split('/')[2] || '',
+        });
       }
     }
-    const summary = pieces.join('\n').slice(0, 3200);
-    return summary || null;
+    if (j.knowledge_graph && j.knowledge_graph.description) {
+      results.unshift({
+        title: j.knowledge_graph.title || '',
+        snippet: j.knowledge_graph.description,
+        link: j.knowledge_graph.source || '',
+        domain: (j.knowledge_graph.source || '').split('/')[2] || '',
+      });
+    }
+    if (!results.length) return null;
+
+    const highTrust = ['gsmarena.com','91mobiles.com','indiatoday.in','indianexpress.com','ndtv.com','theverge.com','techcrunch.com'];
+    const lowTrust = ['forum','reddit','quora'];
+
+    for (const rsl of results) {
+      let score = 50;
+      const d = (rsl.domain || '').toLowerCase();
+      if (highTrust.some(h => d.includes(h))) score += 30;
+      if (lowTrust.some(l => d.includes(l))) score -= 20;
+      if (/\b202[0-9]\b/.test(rsl.snippet + ' ' + rsl.title)) score += 10;
+      if ((rsl.snippet || '').length > 80) score += 5;
+      rsl.score = Math.max(0, Math.min(100, score));
+    }
+
+    results.sort((a,b)=>b.score - a.score);
+    const summaryPieces = results.slice(0,4).map(r => r.snippet || r.title).filter(Boolean);
+    const sources = results.slice(0,5).map(r => r.link || r.domain);
+
+    const confidence = Math.round(results.slice(0,3).reduce((s,x)=>s+x.score,0) / 3);
+
+    return { summary: summaryPieces.join('\n\n'), confidence, sources };
   } catch (err) {
-    console.error('SerpAPI error', err);
+    console.error('Serp evidence error', err);
     return null;
   }
 }
 
+/* --- Route Handler --- */
 export async function POST(req) {
   try {
     const body = await req.json();
     const prompt = (body.prompt || '').toString().trim();
     if (!prompt) return NextResponse.json({ error: 'Missing prompt' }, { status: 400 });
 
-    const userAskedForJSON = /json|machine[- ]?readable|strict schema|only provide/i.test(prompt);
+    const userAskedForJSON = /json|machine[- ]?readable/i.test(prompt);
 
-    // System instruction: generate SEO JSON markers first, then the article
+    let evidence = null;
+    if (!userAskedForJSON && process.env.SERPAPI_KEY) {
+      evidence = await fetchSerpEvidence(prompt);
+    }
+
     const systemMessage = userAskedForJSON
       ? {
           role: 'system',
-          content: 'You are a helpful assistant. The user requested machine-readable output; respond with valid JSON only.'
+          content: 'User requested strict JSON; output only valid JSON.'
         }
       : {
           role: 'system',
           content:
-            'You are a helpful, professional writer. By default, produce a clear, human-readable article in Markdown-style prose. ' +
-            'Additionally, at the very start of your response, output a small SEO JSON object (only once) containing "title" and "meta" fields. ' +
-            'Wrap this JSON object exactly between the markers `<!--SEO_START` and `SEO_END-->` on its own lines so it can be parsed by the client. ' +
-            'Example:\n\n' +
-            '<!--SEO_START\n{"title":"SEO title here","meta":"meta description here (150-160 chars)"}\nSEO_END-->\n\n' +
-            'After that JSON block, output the article in Markdown. Do NOT output any other raw JSON blocks. ' +
-            'If the user explicitly asked for JSON, only output JSON as asked.'
+            'You are a precise content writer. Write a Markdown article. ' +
+            'At the very start, output a JSON block with SEO title+meta wrapped in <!--SEO_START ... SEO_END-->. ' +
+            (evidence
+              ? `Use ONLY these facts as evidence. Do not invent. If confidence <60, warn at start.\n\nEVIDENCE (confidence ${evidence.confidence}%):\n${evidence.summary}\n\nSources:\n${evidence.sources.join('\n')}`
+              : 'No live evidence available — rely on general knowledge, but do not make up specifics.')
         };
 
-    // Optional SerpAPI enrichment
-    let searchSummary = null;
-    if (!userAskedForJSON && process.env.SERPAPI_KEY) {
-      searchSummary = await fetchSerpSummary(prompt);
-    }
-
-    const messages = [systemMessage];
-    if (searchSummary) {
-      messages.push({
-        role: 'system',
-        content:
-          'Up-to-date web search summary (use these facts to improve accuracy). ' +
-          'Incorporate these into the article when relevant. Do NOT output the raw search results; synthesize them into the prose.\n\n' +
-          searchSummary
-      });
-    }
-    messages.push({ role: 'user', content: prompt });
+    const messages = [systemMessage, { role: 'user', content: prompt }];
 
     const openaiRes = await fetch(OPENAI_BASE, {
       method: 'POST',
@@ -95,11 +111,10 @@ export async function POST(req) {
 
     if (!openaiRes.ok) {
       const text = await openaiRes.text();
-      console.error('OpenAI error', openaiRes.status, text);
+      console.error('OpenAI error', text);
       return NextResponse.json({ error: 'OpenAI API error', detail: text }, { status: 500 });
     }
 
-    // Forward the OpenAI stream
     const stream = new ReadableStream({
       async start(controller) {
         const reader = openaiRes.body.getReader();
@@ -111,22 +126,18 @@ export async function POST(req) {
           }
           controller.close();
         } catch (err) {
-          console.error('Stream error', err);
           controller.error(err);
-        } finally {
-          try {
-            reader.releaseLock();
-          } catch (e) {}
         }
       }
     });
 
-    const headers = {
-      'Content-Type': 'text/event-stream',
-      'Cache-Control': 'no-cache, no-transform',
-      Connection: 'keep-alive'
-    };
-    return new Response(stream, { headers });
+    return new Response(stream, {
+      headers: {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache',
+        Connection: 'keep-alive'
+      }
+    });
   } catch (err) {
     console.error('Route error', err);
     return NextResponse.json({ error: 'Server error', detail: err.message }, { status: 500 });
