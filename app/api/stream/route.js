@@ -3,12 +3,18 @@ import { NextResponse } from "next/server";
 
 const OPENAI_URL = "https://api.openai.com/v1/chat/completions";
 
-export async function POST() {
+export async function POST(req) {
   try {
-    // Hardcoded prompt for debugging
+    const body = await req.json();
+    const prompt = (body?.prompt || "").trim();
+
+    if (!prompt) {
+      return NextResponse.json({ error: "missing_prompt" }, { status: 400 });
+    }
+
     const messages = [
       { role: "system", content: "You are a helpful assistant." },
-      { role: "user", content: "Say 'Hello world' in two short sentences." },
+      { role: "user", content: prompt },
     ];
 
     const openaiResp = await fetch(OPENAI_URL, {
@@ -21,7 +27,7 @@ export async function POST() {
         model: "gpt-3.5-turbo",
         messages,
         temperature: 0.7,
-        max_tokens: 100,
+        max_tokens: 700,
         stream: true,
       }),
     });
@@ -34,6 +40,7 @@ export async function POST() {
       );
     }
 
+    // Stream response back as SSE-like "data: ..." chunks
     const stream = new ReadableStream({
       async start(controller) {
         const reader = openaiResp.body.getReader();
@@ -52,35 +59,40 @@ export async function POST() {
               .filter(Boolean);
 
             for (const line of lines) {
-              if (line.startsWith("data:")) {
-                const payload = line.substring(5).trim();
+              if (!line.startsWith("data:")) {
+                // ignore unexpected lines
+                continue;
+              }
 
-                if (payload === "[DONE]") {
-                  controller.enqueue(encoder.encode("data: [DONE]\n\n"));
-                  controller.close();
-                  return;
-                }
+              const payload = line.substring(5).trim();
 
-                try {
-                  const json = JSON.parse(payload);
-                  const token = json.choices[0]?.delta?.content || "";
-                  if (token) {
-                    controller.enqueue(
-                      encoder.encode(
-                        `data: ${JSON.stringify({ text: token })}\n\n`
-                      )
-                    );
-                  }
-                } catch {
+              if (payload === "[DONE]") {
+                controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+                controller.close();
+                return;
+              }
+
+              try {
+                const json = JSON.parse(payload);
+                // handle streaming delta tokens
+                const token = json.choices?.[0]?.delta?.content || "";
+                if (token) {
                   controller.enqueue(
-                    encoder.encode(
-                      `data: ${JSON.stringify({ raw: payload })}\n\n`
-                    )
+                    encoder.encode(`data: ${JSON.stringify({ text: token })}\n\n`)
                   );
                 }
+              } catch (err) {
+                // If the payload isn't JSON, forward raw text for debugging
+                controller.enqueue(
+                  encoder.encode(`data: ${JSON.stringify({ raw: payload })}\n\n`)
+                );
               }
             }
           }
+
+          // In case stream ended without explicit [DONE], close gracefully
+          controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+          controller.close();
         } catch (err) {
           console.error("Stream error:", err);
           controller.error(err);
