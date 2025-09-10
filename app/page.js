@@ -1,15 +1,48 @@
 "use client";
 
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 
 /**
- * Simple streaming UI for /api/stream
- * - Input prompt
- * - Streams token-by-token from the API
- * - Copy to clipboard
- * - Download as Markdown
- * - Simple SEO info: word count + est reading time
+ * app/page.js
+ * - Robust SSE parsing (buffer until "\n\n")
+ * - Improved UI and small SEO scoring functions
  */
+
+function wordCount(text = "") {
+  return (text.match(/\b\w+\b/g) || []).length;
+}
+
+function readingTimeMinutes(text = "") {
+  const wpm = 200;
+  return Math.max(0.1, Math.round((wordCount(text) / wpm) * 10) / 10);
+}
+
+// Very small Flesch reading ease approximation
+function fleschReadingEase(text = "") {
+  const words = wordCount(text);
+  if (!words) return 0;
+  const sentences = Math.max(1, (text.match(/[.!?]+/g) || []).length);
+  const syllables = (text.match(/[aeiouy]{1,2}/gi) || []).length; // rough
+  const ASL = words / sentences;
+  const ASW = syllables / words;
+  const score = 206.835 - 1.015 * ASL - 84.6 * ASW;
+  return Math.round(score);
+}
+
+function topKeywordDensity(text = "", topN = 5) {
+  const tokens = (text || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, "")
+    .split(/\s+/)
+    .filter(Boolean);
+  const freq = {};
+  tokens.forEach((t) => (freq[t] = (freq[t] || 0) + 1));
+  const arr = Object.entries(freq)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, topN)
+    .map(([word, count]) => ({ word, count, pct: Math.round((count / tokens.length) * 1000) / 10 }));
+  return arr;
+}
 
 export default function Page() {
   const [prompt, setPrompt] = useState("");
@@ -17,11 +50,19 @@ export default function Page() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const controllerRef = useRef(null);
+  const bufferRef = useRef(""); // for robust SSE parsing
+  const outRef = useRef(null);
+
+  useEffect(() => {
+    // auto-scroll when output updates
+    try { outRef.current?.scrollIntoView({ behavior: "smooth", block: "end" }); } catch {}
+  }, [output]);
 
   function resetState() {
     setOutput("");
     setError("");
     setLoading(false);
+    bufferRef.current = "";
     if (controllerRef.current) {
       try { controllerRef.current.abort(); } catch {}
       controllerRef.current = null;
@@ -39,9 +80,9 @@ export default function Page() {
     }
 
     setLoading(true);
+    setError("");
 
     try {
-      // Use AbortController so user can cancel if needed
       const controller = new AbortController();
       controllerRef.current = controller;
 
@@ -67,29 +108,49 @@ export default function Page() {
         if (done) break;
         const chunk = decoder.decode(value, { stream: true });
 
-        // The backend sends `data: {...}\n\n` events
-        const lines = chunk.split("\n").filter(Boolean);
-        for (const line of lines) {
-          if (!line.startsWith("data:")) continue;
-          const payload = line.replace(/^data:\s*/, "").trim();
-          if (payload === "[DONE]") {
-            setLoading(false);
-            controllerRef.current = null;
-            return;
-          }
-          try {
-            const parsed = JSON.parse(payload);
-            if (parsed.text) {
-              setOutput((prev) => prev + parsed.text);
-            } else if (parsed.raw) {
-              // optional: include raw payload
-              setOutput((prev) => prev + parsed.raw);
+        // Buffering technique:
+        bufferRef.current += chunk;
+        // process full SSE events separated by double newline "\n\n"
+        let boundaryIndex;
+        while ((boundaryIndex = bufferRef.current.indexOf("\n\n")) !== -1) {
+          const event = bufferRef.current.slice(0, boundaryIndex).trim(); // single event content
+          bufferRef.current = bufferRef.current.slice(boundaryIndex + 2); // remove processed event
+
+          // each event may contain multiple lines like "data: {...}\n"
+          const lines = event.split(/\n/).map((l) => l.trim()).filter(Boolean);
+          for (const line of lines) {
+            if (!line.startsWith("data:")) continue;
+            const payload = line.replace(/^data:\s*/, "");
+            if (payload === "[DONE]") {
+              setLoading(false);
+              controllerRef.current = null;
+              return;
             }
-          } catch {
-            // malformed JSON — append raw payload
-            setOutput((prev) => prev + payload);
+            try {
+              const parsed = JSON.parse(payload);
+              if (parsed.text) {
+                setOutput((prev) => prev + parsed.text);
+              } else if (parsed.raw) {
+                // raw debugging payload
+                setOutput((prev) => prev + parsed.raw);
+              } else {
+                // some responses may contain full chunk objects (metadata). ignore.
+              }
+            } catch {
+              // not JSON — append raw
+              setOutput((prev) => prev + payload);
+            }
           }
         }
+      }
+
+      // flush any remaining buffer (rare)
+      if (bufferRef.current) {
+        const leftover = bufferRef.current.trim();
+        if (leftover) {
+          setOutput((prev) => prev + leftover);
+        }
+        bufferRef.current = "";
       }
 
       setLoading(false);
@@ -135,57 +196,64 @@ export default function Page() {
     URL.revokeObjectURL(url);
   }
 
-  // Simple SEO-ish helpers
-  function wordCount(text) {
-    if (!text) return 0;
-    return text.trim().split(/\s+/).filter(Boolean).length;
-  }
-  function readingTimeMinutes(text) {
-    const wpm = 200;
-    const minutes = wordCount(text) / wpm;
-    return Math.max(0.1, Math.round(minutes * 10) / 10); // 1 decimal
-  }
+  const wc = wordCount(output);
+  const timeMin = readingTimeMinutes(output);
+  const flesch = fleschReadingEase(output);
+  const keywords = topKeywordDensity(output, 5);
 
   return (
-    <main style={{ maxWidth: 900, margin: "2rem auto", padding: "0 1rem", fontFamily: "Inter, system-ui, sans-serif" }}>
-      <h1 style={{ fontSize: 24, marginBottom: 12 }}>SynapseWrite — Live Demo</h1>
+    <main style={{ maxWidth: 1000, margin: "2rem auto", padding: 16, fontFamily: "Inter, system-ui, sans-serif" }}>
+      <h1 style={{ fontSize: 26, marginBottom: 12 }}>SynapseWrite</h1>
 
       <form onSubmit={handleSubmit} style={{ display: "flex", gap: 8, marginBottom: 12 }}>
         <input
           value={prompt}
           onChange={(e) => setPrompt(e.target.value)}
           placeholder="Enter your prompt (e.g., 'Write a 150-word intro about electric cars')"
-          style={{ flex: 1, padding: "10px 12px", border: "1px solid #ddd", borderRadius: 6 }}
+          style={{ flex: 1, padding: 12, border: "1px solid #e6e6e6", borderRadius: 8 }}
           disabled={loading}
         />
-        <button type="submit" style={{ padding: "10px 14px", borderRadius: 6, background: "#0b72ff", color: "white", border: "none" }} disabled={loading}>
+        <button type="submit" style={{ padding: "10px 14px", borderRadius: 8, background: "#0b72ff", color: "white", border: "none" }} disabled={loading}>
           {loading ? "Generating..." : "Generate"}
         </button>
-        <button type="button" onClick={handleCancel} style={{ padding: "10px 12px", borderRadius: 6 }} disabled={!loading}>
+        <button type="button" onClick={handleCancel} style={{ padding: "10px 12px", borderRadius: 8 }} disabled={!loading}>
           Cancel
         </button>
       </form>
 
       {error && <div style={{ color: "crimson", marginBottom: 12 }}>{error}</div>}
 
-      <div style={{ display: "flex", gap: 12, marginBottom: 8 }}>
-        <div style={{ flex: 1, border: "1px solid #eee", padding: 12, borderRadius: 8, minHeight: 120, whiteSpace: "pre-wrap", background: "#fff" }}>
-          {output || (!loading ? "Output will appear here." : "Waiting for stream...")}
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 260px", gap: 16 }}>
+        <div style={{ border: "1px solid #eee", padding: 16, borderRadius: 10, minHeight: 180, background: "#fff", whiteSpace: "pre-wrap", overflowY: "auto" }}>
+          <div style={{ fontSize: 15, lineHeight: 1.6 }}>{output || (loading ? "Waiting for stream..." : "Output will appear here.")}</div>
+          <div ref={outRef} />
+          {loading && <div style={{ marginTop: 8, fontSize: 13, color: "#666" }}>● streaming…</div>}
         </div>
 
-        <div style={{ width: 220, border: "1px solid #f0f0f0", padding: 12, borderRadius: 8, background: "#fafafa" }}>
-          <div style={{ marginBottom: 8, fontWeight: 600 }}>Info</div>
-          <div style={{ fontSize: 13 }}>Words: {wordCount(output)}</div>
-          <div style={{ fontSize: 13 }}>Est. reading: {readingTimeMinutes(output)} min</div>
-          <div style={{ marginTop: 10, display: "flex", gap: 8 }}>
-            <button onClick={handleCopy} disabled={!output} style={{ padding: "6px 8px", borderRadius: 6 }}>Copy</button>
-            <button onClick={downloadMarkdown} disabled={!output} style={{ padding: "6px 8px", borderRadius: 6 }}>Download MD</button>
+        <aside style={{ border: "1px solid #f0f0f0", padding: 12, borderRadius: 10, background: "#fafafa" }}>
+          <div style={{ fontWeight: 700, marginBottom: 8 }}>SEO & Info</div>
+          <div style={{ fontSize: 13, marginBottom: 6 }}>Words: <strong>{wc}</strong></div>
+          <div style={{ fontSize: 13, marginBottom: 6 }}>Reading time: <strong>{timeMin} min</strong></div>
+          <div style={{ fontSize: 13, marginBottom: 6 }}>Flesch score: <strong>{flesch}</strong></div>
+
+          <div style={{ marginTop: 10 }}>
+            <div style={{ fontSize: 13, fontWeight: 600 }}>Top keywords</div>
+            <ul style={{ paddingLeft: 16, marginTop: 6 }}>
+              {keywords.length ? keywords.map(k => (
+                <li key={k.word} style={{ fontSize: 13 }}>{k.word} — {k.count} ({k.pct}%)</li>
+              )) : <li style={{ fontSize: 13, color: "#777" }}>No data yet</li>}
+            </ul>
           </div>
-        </div>
-      </div>
 
-      <div style={{ fontSize: 13, color: "#666" }}>
-        Tip: try prompts like <code>Write a 2-sentence intro to SynapseWrite</code> or <code>List 5 blog post ideas about AI content tools</code>.
+          <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+            <button onClick={handleCopy} disabled={!output} style={{ padding: "8px 10px", borderRadius: 8 }}>Copy</button>
+            <button onClick={downloadMarkdown} disabled={!output} style={{ padding: "8px 10px", borderRadius: 8 }}>Download MD</button>
+          </div>
+
+          <div style={{ marginTop: 10, fontSize: 12, color: "#666" }}>
+            Tip: try prompts like <code>List 5 blog ideas about AI writing</code>.
+          </div>
+        </aside>
       </div>
     </main>
   );
