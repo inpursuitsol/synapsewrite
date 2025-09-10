@@ -1,219 +1,139 @@
-// app/api/stream/route.js
+// app/api/stream/refresh/route.js
 import { NextResponse } from "next/server";
 
 /**
- * Robust SSE -> plain-text proxy for OpenAI streaming responses.
- * - Extracts assistant content from streamed SSE chunks (choices[].delta.content)
- * - Falls back to non-streamed JSON responses (choices[0].message.content)
- * - Logs short debug snippets to server console for diagnosis.
+ * Refresh sources endpoint (improved)
+ * - POST { prompt }
+ * - Requires process.env.SERPAPI_KEY (optional; route will respond gracefully if missing)
  *
- * Requirements:
- * - process.env.OPENAI_API_KEY
+ * Returns:
+ * { sources: [{url,label,snippet,publishedAt?}], confidence: number|null, evidenceSummary: string, warning?: string }
+ *
+ * Confidence is a heuristic (0..1) not a guarantee.
  */
 
-const OPENAI_URL = "https://api.openai.com/v1/chat/completions";
-const OPENAI_MODEL = "gpt-4o-mini-2024-07-18";
+const SERPAPI_KEY = process.env.SERPAPI_KEY || null;
+const SERPAPI_URL = "https://serpapi.com/search.json";
 
-function nowTag() {
-  return new Date().toISOString();
+async function fetchSerpApi(query, options = {}) {
+  const params = new URLSearchParams({
+    engine: "google",
+    q: query,
+    hl: options.hl || "en",
+    gl: options.gl || "in",
+    num: String(options.num || 6),
+    api_key: SERPAPI_KEY,
+  });
+  const url = `${SERPAPI_URL}?${params.toString()}`;
+  const resp = await fetch(url);
+  if (!resp.ok) {
+    const txt = await resp.text();
+    throw new Error(`SerpAPI error ${resp.status}: ${txt}`);
+  }
+  return resp.json();
+}
+
+function parsePublishedDateFromSnippet(snippet) {
+  if (!snippet) return null;
+  const m = snippet.match(/(20\d{2})/); // find a year like 2023/2024/2025
+  return m ? Number(m[1]) : null;
+}
+
+function computeConfidenceFromResults(results) {
+  // Heuristic: base 0.15
+  if (!results || results.length === 0) return null; // unknown
+  let score = 0.25;
+  const n = Math.min(results.length, 6);
+  score += 0.12 * n; // more results -> higher score
+
+  // bump if we detect marketplace/known domains (indicates availability)
+  const marketplaceDomains = ["flipkart.com", "amazon.in", "gsmarena.com", "91mobiles.com"];
+  const domainBoost = results.reduce((acc, r) => {
+    const url = (r.url || "").toLowerCase();
+    return acc + (marketplaceDomains.some(d => url.includes(d)) ? 0.08 : 0);
+  }, 0);
+  score += Math.min(0.25, domainBoost);
+
+  // Recentness: if many snippets reference 2024/2025 -> bump
+  const years = results.map(r => parsePublishedDateFromSnippet(r.snippet)).filter(Boolean);
+  if (years.length > 0) {
+    const recentCount = years.filter(y => y >= 2024).length;
+    score += Math.min(0.25, 0.08 * recentCount);
+  }
+
+  // clamp to 0..0.95
+  score = Math.max(0, Math.min(0.95, score));
+  return Number(score.toFixed(2));
+}
+
+function summarizeTopResults(results) {
+  if (!results || results.length === 0) return "No relevant results found.";
+  const top = results.slice(0, 3);
+  const parts = top.map((r) => {
+    const t = r.label || r.title || (r.url ? new URL(r.url).hostname : "");
+    const s = (r.snippet || "").replace(/\s+/g, " ").trim();
+    return s ? `${t}: ${s}` : t;
+  }).filter(Boolean);
+  return parts.join(" — ");
 }
 
 export async function POST(req) {
   try {
-    const body = await req.json().catch(() => ({}));
-    const prompt = body.prompt || "";
-    const maxTokens = body.maxTokens || 800;
+    const payload = await req.json().catch(() => ({}));
+    const prompt = (payload.prompt || "").trim();
 
     if (!prompt) {
       return NextResponse.json({ error: "Missing prompt" }, { status: 400 });
     }
-    if (!process.env.OPENAI_API_KEY) {
-      return NextResponse.json({ error: "OPENAI_API_KEY not configured" }, { status: 500 });
+
+    if (!SERPAPI_KEY) {
+      // graceful fallback response (no live search available)
+      return NextResponse.json({
+        sources: [],
+        confidence: null,
+        evidenceSummary: "SERPAPI_KEY not configured on the server. Live searches are disabled.",
+        warning: "SERPAPI_KEY_MISSING",
+      });
     }
 
-    const openaiReqBody = {
-      model: OPENAI_MODEL,
-      messages: [
-        {
-          role: "system",
-          content:
-            "You are a helpful assistant that outputs a clean article in plain text followed by a final SEO JSON block. Do NOT emit code fences or label the JSON. The final chunk should be a valid JSON object containing title, meta, confidence, sources (array).",
-        },
-        { role: "user", content: prompt },
-      ],
-      max_tokens: maxTokens,
-      temperature: 0.2,
-      stream: true,
-    };
+    // Build a slightly focused query (bias to India + 2025)
+    // If prompt already contains 'India' or '2025', preserve it; else add context.
+    let query = prompt;
+    if (!/india/i.test(prompt)) query += " India";
+    if (!/202[0-9]/i.test(prompt)) query += " 2025";
 
-    const openaiRes = await fetch(OPENAI_URL, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
-      },
-      body: JSON.stringify(openaiReqBody),
-    });
-
-    // If OpenAI returned non-stream JSON (rare if stream=true but possible), handle gracefully.
-    if (!openaiRes.ok) {
-      const txt = await openaiRes.text();
-      console.error(nowTag(), "OpenAI responded with non-200:", openaiRes.status, txt.slice(0, 800));
-      return NextResponse.json({ error: "OpenAI error", detail: txt }, { status: 502 });
+    let json;
+    try {
+      json = await fetchSerpApi(query, { hl: "en", gl: "in", num: 6 });
+    } catch (err) {
+      console.error("SerpAPI error:", err?.message || err);
+      return NextResponse.json({
+        sources: [],
+        confidence: null,
+        evidenceSummary: `Search failed: ${err?.message || "unknown error"}`,
+        error: err?.message || String(err),
+      }, { status: 502 });
     }
 
-    // If we have a streaming body, parse SSE; otherwise, try to parse as JSON.
-    if (!openaiRes.body) {
-      const txt = await openaiRes.text();
-      console.warn(nowTag(), "No streaming body, raw:", txt.slice(0, 800));
-      try {
-        const parsed = JSON.parse(txt);
-        const altText = parsed?.choices?.[0]?.message?.content || "";
-        if (altText) {
-          return new Response(altText, {
-            status: 200,
-            headers: { "Content-Type": "text/plain; charset=utf-8" },
-          });
-        }
-      } catch (e) {
-        // Fall through to error
-      }
-      return NextResponse.json({ error: "No streaming response body" }, { status: 502 });
-    }
+    const organic = Array.isArray(json.organic_results) ? json.organic_results : [];
+    const sources = organic.slice(0, 6).map((r) => {
+      return {
+        url: r.link || r.url || r.displayed_link || "",
+        label: r.title || r.displayed_link || r.link || "",
+        snippet: r.snippet || r.snippet_highlighted || "",
+      };
+    }).filter(s => s.url);
 
-    const reader = openaiRes.body.getReader();
-    const decoder = new TextDecoder("utf-8");
+    const confidence = computeConfidenceFromResults(sources);
+    const evidenceSummary = summarizeTopResults(sources);
 
-    let fullText = ""; // accumulate all assistant text
-    let sawAnyContent = false;
-    let buffer = "";
-
-    const stream = new ReadableStream({
-      async start(controller) {
-        try {
-          while (true) {
-            const { value, done } = await reader.read();
-            if (done) break;
-            buffer += decoder.decode(value, { stream: true });
-
-            // Split by EOL since SSE uses newline-delimited messages
-            const lines = buffer.split(/\r?\n/);
-            buffer = lines.pop(); // leftover partial line
-
-            for (let rawLine of lines) {
-              const line = rawLine.trim();
-              if (!line) continue;
-              // Looking for: data: {...} or data: [DONE]
-              if (!line.startsWith("data:")) continue;
-              const payload = line.replace(/^data:\s*/, "");
-
-              if (payload === "[DONE]") {
-                // close stream and return
-                controller.close();
-                return;
-              }
-
-              // Attempt to parse JSON payload
-              let parsed;
-              try {
-                parsed = JSON.parse(payload);
-              } catch (err) {
-                // skip unparsable payloads
-                console.warn(nowTag(), "Unparseable SSE payload (skipping). snippet:", payload.slice(0, 200));
-                continue;
-              }
-
-              // Robust extraction of assistant text:
-              // 1) choices[*].delta.content (streaming normal)
-              // 2) choices[*].delta may contain nested structures (safety)
-              // 3) choices[*].message?.content (some APIs)
-              try {
-                const choices = parsed.choices || [];
-                for (let ch of choices) {
-                  // 1. delta.content (standard streaming)
-                  const delta = ch.delta || {};
-                  if (delta && typeof delta === "object") {
-                    // Some SDKs return text fragments under delta.content
-                    if (typeof delta.content === "string" && delta.content.length > 0) {
-                      const piece = delta.content;
-                      sawAnyContent = true;
-                      fullText += piece;
-                      controller.enqueue(new TextEncoder().encode(piece));
-                      continue;
-                    }
-                  }
-
-                  // 2. choices[*].message?.content (non-stream fallback)
-                  const messageContent = ch.message?.content || ch.text || "";
-                  if (messageContent) {
-                    sawAnyContent = true;
-                    fullText += messageContent;
-                    controller.enqueue(new TextEncoder().encode(messageContent));
-                  }
-                }
-              } catch (err) {
-                console.warn(nowTag(), "Error extracting chunk:", err?.message || err);
-              }
-            }
-          }
-
-          // flush leftover buffer if it contains a data: line
-          if (buffer && buffer.includes("data:")) {
-            const leftoverPayload = buffer.replace(/^data:\s*/, "").trim();
-            if (leftoverPayload && leftoverPayload !== "[DONE]") {
-              try {
-                const parsed = JSON.parse(leftoverPayload);
-                const choices = parsed.choices || [];
-                for (let ch of choices) {
-                  const piece = ch.delta?.content || ch.message?.content || ch.text || "";
-                  if (piece) {
-                    sawAnyContent = true;
-                    fullText += piece;
-                    controller.enqueue(new TextEncoder().encode(piece));
-                  }
-                }
-              } catch (e) {
-                // ignore
-              }
-            }
-          }
-
-          // If we never saw any content, enqueue a friendly message so frontend doesn't show blank.
-          if (!sawAnyContent) {
-            const hint = "\n\n[Note from server: No assistant text arrived in the stream. Please try 'Refresh sources' or regenerate.]\n\n";
-            controller.enqueue(new TextEncoder().encode(hint));
-            console.warn(nowTag(), "Stream finished with no content. Forwarded hint to client.");
-          }
-
-          controller.close();
-        } catch (err) {
-          console.error(nowTag(), "Stream parsing error:", err?.message || err);
-          try {
-            controller.error(err);
-          } catch (e) {}
-        } finally {
-          try {
-            reader.releaseLock();
-          } catch (e) {}
-        }
-      },
-      cancel(reason) {
-        // no special handling
-      },
-    });
-
-    // Small debug: log start snippet (trimmed)
-    console.log(nowTag(), "Starting proxy stream for prompt:", prompt.slice(0, 120));
-
-    return new Response(stream, {
-      status: 200,
-      headers: {
-        "Content-Type": "text/plain; charset=utf-8",
-        "Cache-Control": "no-cache, no-transform",
-      },
+    return NextResponse.json({
+      sources,
+      confidence, // may be null if no useful results
+      evidenceSummary,
     });
   } catch (err) {
-    console.error("Stream route fatal error:", err?.message || err);
+    console.error("Refresh route fatal error:", err?.message || err);
     return NextResponse.json({ error: "Internal server error", detail: err?.message || String(err) }, { status: 500 });
   }
 }
