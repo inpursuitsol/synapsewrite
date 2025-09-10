@@ -1,4 +1,5 @@
-// app/api/stream/route.js
+export const dynamic = "force-dynamic";
+
 import { NextResponse } from 'next/server';
 
 const OPENAI_BASE = 'https://api.openai.com/v1/chat/completions';
@@ -22,7 +23,7 @@ async function fetchSerpSummary(query) {
         const title = it.title || '';
         const snippet = it.snippet || it.snippet_highlighted_words || '';
         const src = it.displayed_link || it.link || '';
-        pieces.push(`${i+1}. ${title}${snippet ? ' — ' + snippet : ''}${src ? ' ('+src+')' : ''}`);
+        pieces.push(`${i + 1}. ${title}${snippet ? ' — ' + snippet : ''}${src ? ' (' + src + ')' : ''}`);
       }
     }
     const summary = pieces.join('\n').slice(0, 3200);
@@ -41,7 +42,7 @@ export async function POST(req) {
 
     const userAskedForJSON = /json|machine[- ]?readable|strict schema|only provide/i.test(prompt);
 
-    // IMPORTANT: instruction to output SEO JSON block first (only when user is NOT asking for JSON)
+    // System instruction: generate SEO JSON markers first, then the article
     const systemMessage = userAskedForJSON
       ? {
           role: 'system',
@@ -53,12 +54,13 @@ export async function POST(req) {
             'You are a helpful, professional writer. By default, produce a clear, human-readable article in Markdown-style prose. ' +
             'Additionally, at the very start of your response, output a small SEO JSON object (only once) containing "title" and "meta" fields. ' +
             'Wrap this JSON object exactly between the markers `<!--SEO_START` and `SEO_END-->` on its own lines so it can be parsed by the client. ' +
-            'Example (the client understands this format):\n\n' +
+            'Example:\n\n' +
             '<!--SEO_START\n{"title":"SEO title here","meta":"meta description here (150-160 chars)"}\nSEO_END-->\n\n' +
-            'After that JSON block, output the article in Markdown. Do NOT output any other raw JSON blocks. If the user explicitly asked for JSON, only output JSON as asked.'
+            'After that JSON block, output the article in Markdown. Do NOT output any other raw JSON blocks. ' +
+            'If the user explicitly asked for JSON, only output JSON as asked.'
         };
 
-    // Live search enrichment
+    // Optional SerpAPI enrichment
     let searchSummary = null;
     if (!userAskedForJSON && process.env.SERPAPI_KEY) {
       searchSummary = await fetchSerpSummary(prompt);
@@ -97,7 +99,7 @@ export async function POST(req) {
       return NextResponse.json({ error: 'OpenAI API error', detail: text }, { status: 500 });
     }
 
-    // Forward the streaming response as-is to the client
+    // Forward the OpenAI stream
     const stream = new ReadableStream({
       async start(controller) {
         const reader = openaiRes.body.getReader();
@@ -112,7 +114,9 @@ export async function POST(req) {
           console.error('Stream error', err);
           controller.error(err);
         } finally {
-          try { reader.releaseLock(); } catch (e) {}
+          try {
+            reader.releaseLock();
+          } catch (e) {}
         }
       }
     });
