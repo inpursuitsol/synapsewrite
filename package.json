@@ -12,6 +12,7 @@
     "react": "18.2.0",
     "react-dom": "18.2.0",
     "openai": "^4.0.0",
+    "@tailwindcss/typography": "^0.5.10",
     "@vercel/kv": "latest"
   },
   "devDependencies": {
