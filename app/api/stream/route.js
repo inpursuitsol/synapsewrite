@@ -5,7 +5,6 @@ import { NextResponse } from 'next/server';
 const OPENAI_BASE = 'https://api.openai.com/v1/chat/completions';
 const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-4o-mini';
 
-/* --- Robust SerpAPI Evidence --- */
 async function fetchSerpEvidence(query, opts = {}) {
   const API_KEY = process.env.SERPAPI_KEY;
   if (!API_KEY) return null;
@@ -53,7 +52,6 @@ async function fetchSerpEvidence(query, opts = {}) {
     results.sort((a,b)=>b.score - a.score);
     const summaryPieces = results.slice(0,4).map(r => r.snippet || r.title).filter(Boolean);
     const sources = results.slice(0,5).map(r => r.link || r.domain);
-
     const confidence = Math.round(results.slice(0,3).reduce((s,x)=>s+x.score,0) / 3);
 
     return { summary: summaryPieces.join('\n\n'), confidence, sources };
@@ -63,7 +61,6 @@ async function fetchSerpEvidence(query, opts = {}) {
   }
 }
 
-/* --- Route Handler --- */
 export async function POST(req) {
   try {
     const body = await req.json();
@@ -86,10 +83,12 @@ export async function POST(req) {
           role: 'system',
           content:
             'You are a precise content writer. Write a Markdown article. ' +
-            'At the very start, output a JSON block with SEO title+meta wrapped in <!--SEO_START ... SEO_END-->. ' +
+            'At the very start, output a JSON block wrapped in <!--SEO_START ... SEO_END--> with: "title", "meta", ' +
+            '"confidence" (number), and "sources" (array). Example:\n\n' +
+            '<!--SEO_START\n{"title":"...","meta":"...","confidence":85,"sources":["url1","url2"]}\nSEO_END-->\n\n' +
             (evidence
-              ? `Use ONLY these facts as evidence. Do not invent. If confidence <60, warn at start.\n\nEVIDENCE (confidence ${evidence.confidence}%):\n${evidence.summary}\n\nSources:\n${evidence.sources.join('\n')}`
-              : 'No live evidence available — rely on general knowledge, but do not make up specifics.')
+              ? `Use ONLY these facts. Confidence ${evidence.confidence}%. Sources:\n${evidence.sources.join('\n')}\n\nFacts:\n${evidence.summary}`
+              : 'No live evidence available — rely on general knowledge, but do not invent specifics.')
         };
 
     const messages = [systemMessage, { role: 'user', content: prompt }];
