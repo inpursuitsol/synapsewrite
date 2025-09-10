@@ -5,58 +5,26 @@ import { NextResponse } from 'next/server';
 const OPENAI_BASE = 'https://api.openai.com/v1/chat/completions';
 const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-4o-mini';
 
+// Simple SerpAPI fetch
 async function fetchSerpEvidence(query, opts = {}) {
   const API_KEY = process.env.SERPAPI_KEY;
   if (!API_KEY) return null;
-  const num = opts.numResults || 6;
   try {
-    const url = `https://serpapi.com/search.json?q=${encodeURIComponent(query)}&gl=IN&hl=en&num=${num}&api_key=${API_KEY}`;
+    const url = `https://serpapi.com/search.json?q=${encodeURIComponent(query)}&gl=IN&hl=en&num=6&api_key=${API_KEY}`;
     const r = await fetch(url);
     if (!r.ok) return null;
     const j = await r.json();
+    if (!Array.isArray(j.organic_results)) return null;
 
-    const results = [];
-    if (Array.isArray(j.organic_results)) {
-      for (const it of j.organic_results.slice(0, num)) {
-        results.push({
-          title: it.title || '',
-          snippet: (it.snippet || '').trim(),
-          link: it.link || '',
-          domain: (it.link || '').split('/')[2] || '',
-        });
-      }
-    }
-    if (j.knowledge_graph && j.knowledge_graph.description) {
-      results.unshift({
-        title: j.knowledge_graph.title || '',
-        snippet: j.knowledge_graph.description,
-        link: j.knowledge_graph.source || '',
-        domain: (j.knowledge_graph.source || '').split('/')[2] || '',
-      });
-    }
-    if (!results.length) return null;
+    const results = j.organic_results.map(r => ({
+      title: r.title,
+      snippet: r.snippet,
+      link: r.link
+    })).slice(0, 5);
 
-    const highTrust = ['gsmarena.com','91mobiles.com','indiatoday.in','indianexpress.com','ndtv.com','theverge.com','techcrunch.com'];
-    const lowTrust = ['forum','reddit','quora'];
-
-    for (const rsl of results) {
-      let score = 50;
-      const d = (rsl.domain || '').toLowerCase();
-      if (highTrust.some(h => d.includes(h))) score += 30;
-      if (lowTrust.some(l => d.includes(l))) score -= 20;
-      if (/\b202[0-9]\b/.test(rsl.snippet + ' ' + rsl.title)) score += 10;
-      if ((rsl.snippet || '').length > 80) score += 5;
-      rsl.score = Math.max(0, Math.min(100, score));
-    }
-
-    results.sort((a,b)=>b.score - a.score);
-    const summaryPieces = results.slice(0,4).map(r => r.snippet || r.title).filter(Boolean);
-    const sources = results.slice(0,5).map(r => r.link || r.domain);
-    const confidence = Math.round(results.slice(0,3).reduce((s,x)=>s+x.score,0) / 3);
-
-    return { summary: summaryPieces.join('\n\n'), confidence, sources };
-  } catch (err) {
-    console.error('Serp evidence error', err);
+    const summary = results.map(r => r.snippet).filter(Boolean).join('\n\n');
+    return { summary, confidence: 80, sources: results.map(r => r.link) };
+  } catch {
     return null;
   }
 }
@@ -67,29 +35,25 @@ export async function POST(req) {
     const prompt = (body.prompt || '').toString().trim();
     if (!prompt) return NextResponse.json({ error: 'Missing prompt' }, { status: 400 });
 
-    const userAskedForJSON = /json|machine[- ]?readable/i.test(prompt);
-
     let evidence = null;
-    if (!userAskedForJSON && process.env.SERPAPI_KEY) {
+    if (process.env.SERPAPI_KEY) {
       evidence = await fetchSerpEvidence(prompt);
     }
 
-    const systemMessage = userAskedForJSON
-      ? {
-          role: 'system',
-          content: 'User requested strict JSON; output only valid JSON.'
-        }
-      : {
-          role: 'system',
-          content:
-            'You are a precise content writer. Write a Markdown article. ' +
-            'At the very start, output a JSON block wrapped in <!--SEO_START ... SEO_END--> with: "title", "meta", ' +
-            '"confidence" (number), and "sources" (array). Example:\n\n' +
-            '<!--SEO_START\n{"title":"...","meta":"...","confidence":85,"sources":["url1","url2"]}\nSEO_END-->\n\n' +
-            (evidence
-              ? `Use ONLY these facts. Confidence ${evidence.confidence}%. Sources:\n${evidence.sources.join('\n')}\n\nFacts:\n${evidence.summary}`
-              : 'No live evidence available — rely on general knowledge, but do not invent specifics.')
-        };
+    const systemMessage = {
+      role: 'system',
+      content:
+        'You are a professional content writer. ' +
+        'ALWAYS output a polished, natural article (Markdown OK). ' +
+        'Do NOT output raw JSON or API objects except the SEO JSON block at the top. ' +
+        'Structure: short compelling title + 2–4 sentence introduction + well-structured paragraphs + conclusion. ' +
+        'Avoid inline numbered lists or bullet dumps unless explicitly requested. ' +
+        'Only use facts from EVIDENCE if provided. If confidence <60, add a warning note. ' +
+        'Target 500–800 words. Keep tone neutral and clear.\n\n' +
+        (evidence
+          ? `EVIDENCE (confidence ${evidence.confidence}%):\n${evidence.summary}\n\nSources:\n${evidence.sources.join('\n')}`
+          : 'No live evidence available — rely on general knowledge, but do not invent specifics.')
+    };
 
     const messages = [systemMessage, { role: 'user', content: prompt }];
 
@@ -102,7 +66,8 @@ export async function POST(req) {
       body: JSON.stringify({
         model: OPENAI_MODEL,
         messages,
-        temperature: 0.7,
+        temperature: 0.2,
+        top_p: 0.9,
         max_tokens: 900,
         stream: true
       })
@@ -110,7 +75,6 @@ export async function POST(req) {
 
     if (!openaiRes.ok) {
       const text = await openaiRes.text();
-      console.error('OpenAI error', text);
       return NextResponse.json({ error: 'OpenAI API error', detail: text }, { status: 500 });
     }
 
@@ -138,7 +102,6 @@ export async function POST(req) {
       }
     });
   } catch (err) {
-    console.error('Route error', err);
     return NextResponse.json({ error: 'Server error', detail: err.message }, { status: 500 });
   }
 }
