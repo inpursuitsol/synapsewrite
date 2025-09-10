@@ -1,34 +1,35 @@
 "use client";
 
-import { useState, useRef, useEffect } from "react";
+import React, { useState, useRef, useEffect } from "react";
 
 /**
- * app/page.js
- * - Robust SSE parsing (buffer until "\n\n")
- * - Improved UI and small SEO scoring functions
+ * Client page (app/page.js)
+ * - Robust SSE parser (buffers until "\n\n")
+ * - Streamed output rendering with auto-scroll
+ * - Copy to clipboard and download Markdown
+ * - Small SEO helpers (word count, reading time, Flesch approximation)
+ *
+ * This is plain JS (no TypeScript). It uses Tailwind classes where present,
+ * but it will function without Tailwind installed.
  */
 
 function wordCount(text = "") {
   return (text.match(/\b\w+\b/g) || []).length;
 }
-
 function readingTimeMinutes(text = "") {
   const wpm = 200;
   return Math.max(0.1, Math.round((wordCount(text) / wpm) * 10) / 10);
 }
-
-// Very small Flesch reading ease approximation
 function fleschReadingEase(text = "") {
   const words = wordCount(text);
   if (!words) return 0;
   const sentences = Math.max(1, (text.match(/[.!?]+/g) || []).length);
-  const syllables = (text.match(/[aeiouy]{1,2}/gi) || []).length; // rough
+  const syllables = (text.match(/[aeiouy]{1,2}/gi) || []).length;
   const ASL = words / sentences;
   const ASW = syllables / words;
   const score = 206.835 - 1.015 * ASL - 84.6 * ASW;
   return Math.round(score);
 }
-
 function topKeywordDensity(text = "", topN = 5) {
   const tokens = (text || "")
     .toLowerCase()
@@ -37,11 +38,10 @@ function topKeywordDensity(text = "", topN = 5) {
     .filter(Boolean);
   const freq = {};
   tokens.forEach((t) => (freq[t] = (freq[t] || 0) + 1));
-  const arr = Object.entries(freq)
+  return Object.entries(freq)
     .sort((a, b) => b[1] - a[1])
     .slice(0, topN)
     .map(([word, count]) => ({ word, count, pct: Math.round((count / tokens.length) * 1000) / 10 }));
-  return arr;
 }
 
 export default function Page() {
@@ -49,29 +49,28 @@ export default function Page() {
   const [output, setOutput] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-  const controllerRef = useRef(null);
-  const bufferRef = useRef(""); // for robust SSE parsing
+  const ctrlRef = useRef(null);
+  const bufferRef = useRef("");
   const outRef = useRef(null);
 
   useEffect(() => {
-    // auto-scroll when output updates
     try { outRef.current?.scrollIntoView({ behavior: "smooth", block: "end" }); } catch {}
   }, [output]);
 
-  function resetState() {
+  function reset() {
     setOutput("");
     setError("");
     setLoading(false);
     bufferRef.current = "";
-    if (controllerRef.current) {
-      try { controllerRef.current.abort(); } catch {}
-      controllerRef.current = null;
+    if (ctrlRef.current) {
+      try { ctrlRef.current.abort(); } catch {}
+      ctrlRef.current = null;
     }
   }
 
   async function handleSubmit(e) {
-    e?.preventDefault?.();
-    resetState();
+    e && e.preventDefault();
+    reset();
 
     const trimmed = (prompt || "").trim();
     if (!trimmed) {
@@ -84,7 +83,7 @@ export default function Page() {
 
     try {
       const controller = new AbortController();
-      controllerRef.current = controller;
+      ctrlRef.current = controller;
 
       const res = await fetch("/api/stream", {
         method: "POST",
@@ -108,68 +107,57 @@ export default function Page() {
         if (done) break;
         const chunk = decoder.decode(value, { stream: true });
 
-        // Buffering technique:
         bufferRef.current += chunk;
-        // process full SSE events separated by double newline "\n\n"
-        let boundaryIndex;
-        while ((boundaryIndex = bufferRef.current.indexOf("\n\n")) !== -1) {
-          const event = bufferRef.current.slice(0, boundaryIndex).trim(); // single event content
-          bufferRef.current = bufferRef.current.slice(boundaryIndex + 2); // remove processed event
 
-          // each event may contain multiple lines like "data: {...}\n"
-          const lines = event.split(/\n/).map((l) => l.trim()).filter(Boolean);
+        // parse events separated by double newline
+        let idx;
+        while ((idx = bufferRef.current.indexOf("\n\n")) !== -1) {
+          const event = bufferRef.current.slice(0, idx).trim();
+          bufferRef.current = bufferRef.current.slice(idx + 2);
+
+          const lines = event.split(/\n/).map(l => l.trim()).filter(Boolean);
           for (const line of lines) {
             if (!line.startsWith("data:")) continue;
             const payload = line.replace(/^data:\s*/, "");
             if (payload === "[DONE]") {
               setLoading(false);
-              controllerRef.current = null;
+              ctrlRef.current = null;
               return;
             }
             try {
               const parsed = JSON.parse(payload);
               if (parsed.text) {
-                setOutput((prev) => prev + parsed.text);
+                setOutput(prev => prev + parsed.text);
               } else if (parsed.raw) {
-                // raw debugging payload
-                setOutput((prev) => prev + parsed.raw);
-              } else {
-                // some responses may contain full chunk objects (metadata). ignore.
+                setOutput(prev => prev + parsed.raw);
               }
             } catch {
-              // not JSON — append raw
-              setOutput((prev) => prev + payload);
+              setOutput(prev => prev + payload);
             }
           }
         }
       }
 
-      // flush any remaining buffer (rare)
-      if (bufferRef.current) {
-        const leftover = bufferRef.current.trim();
-        if (leftover) {
-          setOutput((prev) => prev + leftover);
-        }
+      // flush leftover
+      if (bufferRef.current.trim()) {
+        setOutput(prev => prev + bufferRef.current.trim());
         bufferRef.current = "";
       }
 
       setLoading(false);
-      controllerRef.current = null;
+      ctrlRef.current = null;
     } catch (err) {
-      if (err.name === "AbortError") {
-        setError("Request cancelled.");
-      } else {
-        setError(String(err));
-      }
+      if (err?.name === "AbortError") setError("Request cancelled.");
+      else setError(String(err));
       setLoading(false);
-      controllerRef.current = null;
+      ctrlRef.current = null;
     }
   }
 
   function handleCancel() {
-    if (controllerRef.current) {
-      try { controllerRef.current.abort(); } catch {}
-      controllerRef.current = null;
+    if (ctrlRef.current) {
+      try { ctrlRef.current.abort(); } catch {}
+      ctrlRef.current = null;
     }
     setLoading(false);
   }
@@ -202,56 +190,51 @@ export default function Page() {
   const keywords = topKeywordDensity(output, 5);
 
   return (
-    <main style={{ maxWidth: 1000, margin: "2rem auto", padding: 16, fontFamily: "Inter, system-ui, sans-serif" }}>
-      <h1 style={{ fontSize: 26, marginBottom: 12 }}>SynapseWrite</h1>
+    <main className="max-w-4xl mx-auto p-6" style={{ fontFamily: "Inter, system-ui, sans-serif" }}>
+      <header className="flex items-center justify-between mb-6">
+        <h1 className="text-2xl font-bold">SynapseWrite</h1>
+        <div className="text-sm text-gray-500">Live streaming editor</div>
+      </header>
 
-      <form onSubmit={handleSubmit} style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+      <form onSubmit={handleSubmit} className="flex gap-3 mb-4">
         <input
           value={prompt}
           onChange={(e) => setPrompt(e.target.value)}
-          placeholder="Enter your prompt (e.g., 'Write a 150-word intro about electric cars')"
-          style={{ flex: 1, padding: 12, border: "1px solid #e6e6e6", borderRadius: 8 }}
+          placeholder="Prompt — e.g. 'Write 5 blog titles about AI writing tools'"
+          className="flex-1 border rounded-md p-3 shadow-sm"
           disabled={loading}
         />
-        <button type="submit" style={{ padding: "10px 14px", borderRadius: 8, background: "#0b72ff", color: "white", border: "none" }} disabled={loading}>
+        <button type="submit" className="bg-blue-600 text-white px-4 py-2 rounded-md shadow" disabled={loading}>
           {loading ? "Generating..." : "Generate"}
         </button>
-        <button type="button" onClick={handleCancel} style={{ padding: "10px 12px", borderRadius: 8 }} disabled={!loading}>
+        <button type="button" className="px-3 py-2 border rounded-md" onClick={handleCancel} disabled={!loading}>
           Cancel
         </button>
       </form>
 
-      {error && <div style={{ color: "crimson", marginBottom: 12 }}>{error}</div>}
+      {error && <div className="mb-4 text-sm text-red-600">{error}</div>}
 
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 260px", gap: 16 }}>
-        <div style={{ border: "1px solid #eee", padding: 16, borderRadius: 10, minHeight: 180, background: "#fff", whiteSpace: "pre-wrap", overflowY: "auto" }}>
-          <div style={{ fontSize: 15, lineHeight: 1.6 }}>{output || (loading ? "Waiting for stream..." : "Output will appear here.")}</div>
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        <section className="lg:col-span-2 bg-white p-4 rounded-lg shadow-sm min-h-[220px]">
+          <div style={{ whiteSpace: "pre-wrap", lineHeight: 1.7 }}>{output || (loading ? "Waiting for stream..." : "Output will appear here.")}</div>
           <div ref={outRef} />
-          {loading && <div style={{ marginTop: 8, fontSize: 13, color: "#666" }}>● streaming…</div>}
-        </div>
-
-        <aside style={{ border: "1px solid #f0f0f0", padding: 12, borderRadius: 10, background: "#fafafa" }}>
-          <div style={{ fontWeight: 700, marginBottom: 8 }}>SEO & Info</div>
-          <div style={{ fontSize: 13, marginBottom: 6 }}>Words: <strong>{wc}</strong></div>
-          <div style={{ fontSize: 13, marginBottom: 6 }}>Reading time: <strong>{timeMin} min</strong></div>
-          <div style={{ fontSize: 13, marginBottom: 6 }}>Flesch score: <strong>{flesch}</strong></div>
-
-          <div style={{ marginTop: 10 }}>
-            <div style={{ fontSize: 13, fontWeight: 600 }}>Top keywords</div>
-            <ul style={{ paddingLeft: 16, marginTop: 6 }}>
-              {keywords.length ? keywords.map(k => (
-                <li key={k.word} style={{ fontSize: 13 }}>{k.word} — {k.count} ({k.pct}%)</li>
-              )) : <li style={{ fontSize: 13, color: "#777" }}>No data yet</li>}
-            </ul>
+          <div className="mt-3 flex gap-2">
+            <button className="px-3 py-1 border rounded" onClick={handleCopy} disabled={!output}>Copy</button>
+            <button className="px-3 py-1 border rounded" onClick={downloadMarkdown} disabled={!output}>Download MD</button>
           </div>
+        </section>
 
-          <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
-            <button onClick={handleCopy} disabled={!output} style={{ padding: "8px 10px", borderRadius: 8 }}>Copy</button>
-            <button onClick={downloadMarkdown} disabled={!output} style={{ padding: "8px 10px", borderRadius: 8 }}>Download MD</button>
-          </div>
+        <aside className="bg-gray-50 p-4 rounded-lg shadow-sm">
+          <div className="font-semibold mb-2">Info</div>
+          <div className="text-sm mb-2">Words: <strong>{wc}</strong></div>
+          <div className="text-sm mb-2">Reading: <strong>{timeMin} min</strong></div>
+          <div className="text-sm mb-4">Flesch score: <strong>{flesch}</strong></div>
 
-          <div style={{ marginTop: 10, fontSize: 12, color: "#666" }}>
-            Tip: try prompts like <code>List 5 blog ideas about AI writing</code>.
+          <div className="font-semibold mb-2">Top keywords</div>
+          <div className="text-sm">
+            {keywords.length ? keywords.map(k => (
+              <div key={k.word} className="py-0.5">{k.word} — {k.count} ({k.pct}%)</div>
+            )) : <div className="text-gray-500">No data yet</div>}
           </div>
         </aside>
       </div>
