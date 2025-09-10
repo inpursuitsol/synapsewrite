@@ -3,16 +3,14 @@ import { NextResponse } from "next/server";
 
 const OPENAI_URL = "https://api.openai.com/v1/chat/completions";
 
-export async function POST(req) {
+export async function POST() {
   try {
-    const body = await req.json();
-    const prompt = (body?.prompt || "").trim();
+    // Hardcoded prompt for debugging
+    const messages = [
+      { role: "system", content: "You are a helpful assistant." },
+      { role: "user", content: "Say 'Hello world' in two short sentences." },
+    ];
 
-    if (!prompt) {
-      return NextResponse.json({ error: "missing_prompt" }, { status: 400 });
-    }
-
-    // Call OpenAI streaming chat completion
     const openaiResp = await fetch(OPENAI_URL, {
       method: "POST",
       headers: {
@@ -20,13 +18,10 @@ export async function POST(req) {
         Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
       },
       body: JSON.stringify({
-        model: "gpt-3.5-turbo", // stable streaming model
-        messages: [
-          { role: "system", content: "You are a helpful assistant." },
-          { role: "user", content: prompt },
-        ],
+        model: "gpt-3.5-turbo",
+        messages,
         temperature: 0.7,
-        max_tokens: 300,
+        max_tokens: 100,
         stream: true,
       }),
     });
@@ -39,7 +34,6 @@ export async function POST(req) {
       );
     }
 
-    // Stream response back as SSE-like "data: ..." chunks
     const stream = new ReadableStream({
       async start(controller) {
         const reader = openaiResp.body.getReader();
@@ -77,8 +71,7 @@ export async function POST(req) {
                       )
                     );
                   }
-                } catch (err) {
-                  // forward raw line if not JSON
+                } catch {
                   controller.enqueue(
                     encoder.encode(
                       `data: ${JSON.stringify({ raw: payload })}\n\n`
@@ -89,4 +82,28 @@ export async function POST(req) {
             }
           }
         } catch (err) {
-          console.
+          console.error("Stream error:", err);
+          controller.error(err);
+        } finally {
+          try {
+            reader.releaseLock();
+          } catch {}
+        }
+      },
+    });
+
+    return new Response(stream, {
+      headers: {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache, no-transform",
+        Connection: "keep-alive",
+      },
+    });
+  } catch (err) {
+    console.error("Route error:", err);
+    return NextResponse.json(
+      { error: "server_error", detail: String(err) },
+      { status: 500 }
+    );
+  }
+}
