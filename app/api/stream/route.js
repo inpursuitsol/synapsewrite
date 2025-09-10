@@ -5,8 +5,8 @@ import { NextResponse } from 'next/server';
 const OPENAI_BASE = 'https://api.openai.com/v1/chat/completions';
 const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-4o-mini';
 
-// Simple SerpAPI fetch
-async function fetchSerpEvidence(query, opts = {}) {
+// Simple SerpAPI fetch (basic evidence)
+async function fetchSerpEvidence(query) {
   const API_KEY = process.env.SERPAPI_KEY;
   if (!API_KEY) return null;
   try {
@@ -16,11 +16,11 @@ async function fetchSerpEvidence(query, opts = {}) {
     const j = await r.json();
     if (!Array.isArray(j.organic_results)) return null;
 
-    const results = j.organic_results.map(r => ({
+    const results = j.organic_results.slice(0, 5).map(r => ({
       title: r.title,
       snippet: r.snippet,
       link: r.link
-    })).slice(0, 5);
+    }));
 
     const summary = results.map(r => r.snippet).filter(Boolean).join('\n\n');
     return { summary, confidence: 80, sources: results.map(r => r.link) };
@@ -40,19 +40,19 @@ export async function POST(req) {
       evidence = await fetchSerpEvidence(prompt);
     }
 
+    // 🔑 Fixed: clean SEO JSON block, no "json" leaks
     const systemMessage = {
       role: 'system',
       content:
         'You are a professional content writer. ' +
-        'ALWAYS output a polished, natural article (Markdown OK). ' +
-        'Do NOT output raw JSON or API objects except the SEO JSON block at the top. ' +
-        'Structure: short compelling title + 2–4 sentence introduction + well-structured paragraphs + conclusion. ' +
-        'Avoid inline numbered lists or bullet dumps unless explicitly requested. ' +
-        'Only use facts from EVIDENCE if provided. If confidence <60, add a warning note. ' +
-        'Target 500–800 words. Keep tone neutral and clear.\n\n' +
+        'At the VERY START of your response, output ONLY a single JSON object wrapped between <!--SEO_START and SEO_END--> (each marker on its own line). ' +
+        'Do NOT label it with words like json, code, or backticks. ' +
+        'The JSON must have keys: "title", "meta", "confidence", "sources". ' +
+        'After SEO_END-->, immediately begin a polished article: short title, 2–4 sentence introduction, clear paragraphs, and conclusion. ' +
+        'Avoid long numbered lists unless the user explicitly asks. ' +
         (evidence
           ? `EVIDENCE (confidence ${evidence.confidence}%):\n${evidence.summary}\n\nSources:\n${evidence.sources.join('\n')}`
-          : 'No live evidence available — rely on general knowledge, but do not invent specifics.')
+          : 'No live evidence available — rely on general knowledge only.')
     };
 
     const messages = [systemMessage, { role: 'user', content: prompt }];
