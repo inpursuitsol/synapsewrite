@@ -48,6 +48,27 @@ export default function Page() {
     return s;
   }
 
+  // ====== Helper: human-friendly confidence formatting ======
+  function formatConfidence(conf) {
+    // conf may be a decimal 0..1 or a percent 0..100 — handle both
+    if (conf === null || conf === undefined) return "—";
+    const n = Number(conf);
+    if (Number.isNaN(n)) return "—";
+    let pct = n;
+    if (pct <= 1.2) pct = Math.round(pct * 100); // treat as 0..1 decimal
+    else pct = Math.round(pct); // already percent
+    return `${pct}%`;
+  }
+
+  function confidenceExplanation(conf) {
+    if (conf === null || conf === undefined) {
+      return "Confidence unavailable — refresh sources to compute evidence-backed confidence.";
+    }
+    // short explanation
+    const pctText = formatConfidence(conf);
+    return `${pctText} — heuristic estimate of how well available sources support this draft. Higher is better; it's not a 'grade'.`;
+  }
+
   // Refresh sources endpoint caller — updates seo and suggestions
   async function handleRefreshSources() {
     // Allow refresh even if prompt is empty: fall back to article text or return with message
@@ -78,7 +99,8 @@ export default function Page() {
       const updatedSeo = {
         ...(seo || {}),
         sources: data.sources || [],
-        confidence: data.confidence ?? (seo && seo.confidence),
+        // store raw confidence as returned (we format in UI)
+        confidence: data.confidence ?? (seo && seo.confidence) ?? null,
       };
       setSeo(updatedSeo);
       setSuggestions(generateFriendlySuggestions(updatedSeo, article));
@@ -87,6 +109,48 @@ export default function Page() {
       setStatusMessage("Failed to refresh sources: " + (e.message || "error"));
     } finally {
       setRefreshing(false);
+    }
+  }
+
+  // Robust copy-to-clipboard with fallback
+  async function copyArticleAsMarkdown() {
+    if (!article) {
+      setStatusMessage("Nothing to copy — generate an article first.");
+      return;
+    }
+    const md = `# ${seo?.title || "Untitled"}\n\n${article}`;
+    setStatusMessage("Copying article...");
+    try {
+      // try modern clipboard API
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        await navigator.clipboard.writeText(md);
+        setStatusMessage("Copied article to clipboard (Markdown).");
+        return;
+      }
+    } catch (e) {
+      // fallthrough to fallback
+      console.warn("Clipboard API failed:", e?.message || e);
+    }
+
+    // fallback: textarea + execCommand
+    try {
+      const ta = document.createElement("textarea");
+      ta.value = md;
+      ta.setAttribute("readonly", "");
+      ta.style.position = "fixed";
+      ta.style.left = "-9999px";
+      document.body.appendChild(ta);
+      ta.select();
+      ta.setSelectionRange(0, ta.value.length);
+      const ok = document.execCommand("copy");
+      document.body.removeChild(ta);
+      if (ok) {
+        setStatusMessage("Copied article to clipboard (Markdown).");
+      } else {
+        setStatusMessage("Copy failed — your browser blocked clipboard access.");
+      }
+    } catch (e) {
+      setStatusMessage("Copy failed: " + (e.message || "unknown error"));
     }
   }
 
@@ -242,7 +306,10 @@ export default function Page() {
               <div className="mt-2 flex items-center justify-between">
                 <div>
                   <div className="text-2xl font-semibold">{getPublishReadiness().label}</div>
-                  <div className="text-sm text-gray-500">{seo ? `Confidence: ${seo.confidence ?? "—"}` : "No SEO info yet"}</div>
+                  <div className="text-sm text-gray-500">
+                    Confidence: <strong>{formatConfidence(seo?.confidence)}</strong>
+                  </div>
+                  <div className="text-xs text-gray-400 mt-1">{confidenceExplanation(seo?.confidence)}</div>
                 </div>
                 <div>
                   <div className={`px-3 py-1 rounded-full text-sm font-medium ${getPublishReadiness().tone === "green" ? "bg-green-100 text-green-800" : getPublishReadiness().tone === "amber" ? "bg-amber-100 text-amber-800" : "bg-red-100 text-red-800"}`}>
@@ -287,10 +354,9 @@ export default function Page() {
                   {refreshing ? "Fetching..." : "Refresh sources"}
                 </button>
                 <button
-                  className="flex-1 px-3 py-2 rounded-md bg-blue-600 text-white"
-                  onClick={() => {
-                    navigator.clipboard.writeText(`# ${seo?.title || "Untitled"}\n\n${article}`).then(() => setStatusMessage("Copied article to clipboard (Markdown)."));
-                  }}
+                  className={`flex-1 px-3 py-2 rounded-md ${!article ? "bg-gray-300 text-gray-600 cursor-not-allowed" : "bg-blue-600 text-white"}`}
+                  onClick={() => copyArticleAsMarkdown()}
+                  disabled={!article}
                 >
                   Copy Markdown
                 </button>
