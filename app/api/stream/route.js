@@ -12,7 +12,6 @@ async function fetchSerpSummary(query) {
     const r = await fetch(url);
     if (!r.ok) return null;
     const j = await r.json();
-    // Build a short summary from common SerpAPI fields (organic_results & knowledge_graph)
     const pieces = [];
     if (j.knowledge_graph && j.knowledge_graph.description) {
       pieces.push(`Knowledge: ${j.knowledge_graph.description}`);
@@ -26,7 +25,7 @@ async function fetchSerpSummary(query) {
         pieces.push(`${i+1}. ${title}${snippet ? ' — ' + snippet : ''}${src ? ' ('+src+')' : ''}`);
       }
     }
-    const summary = pieces.join('\n').slice(0, 3200); // cap length
+    const summary = pieces.join('\n').slice(0, 3200);
     return summary || null;
   } catch (err) {
     console.error('SerpAPI error', err);
@@ -40,10 +39,9 @@ export async function POST(req) {
     const prompt = (body.prompt || '').toString().trim();
     if (!prompt) return NextResponse.json({ error: 'Missing prompt' }, { status: 400 });
 
-    // Detect if user explicitly asked for JSON / machine-readable
     const userAskedForJSON = /json|machine[- ]?readable|strict schema|only provide/i.test(prompt);
 
-    // Base system instruction: prefer prose unless JSON requested
+    // IMPORTANT: instruction to output SEO JSON block first (only when user is NOT asking for JSON)
     const systemMessage = userAskedForJSON
       ? {
           role: 'system',
@@ -53,17 +51,19 @@ export async function POST(req) {
           role: 'system',
           content:
             'You are a helpful, professional writer. By default, produce a clear, human-readable article in Markdown-style prose. ' +
-            'Write a strong title, short introduction, 3-6 subheadings where appropriate, and a concise conclusion. ' +
-            'Do NOT return JSON or only structured data unless the user explicitly asks for JSON or machine-readable output.'
+            'Additionally, at the very start of your response, output a small SEO JSON object (only once) containing "title" and "meta" fields. ' +
+            'Wrap this JSON object exactly between the markers `<!--SEO_START` and `SEO_END-->` on its own lines so it can be parsed by the client. ' +
+            'Example (the client understands this format):\n\n' +
+            '<!--SEO_START\n{"title":"SEO title here","meta":"meta description here (150-160 chars)"}\nSEO_END-->\n\n' +
+            'After that JSON block, output the article in Markdown. Do NOT output any other raw JSON blocks. If the user explicitly asked for JSON, only output JSON as asked.'
         };
 
-    // Try to fetch live search summary (only when not asking for JSON)
+    // Live search enrichment
     let searchSummary = null;
     if (!userAskedForJSON && process.env.SERPAPI_KEY) {
       searchSummary = await fetchSerpSummary(prompt);
     }
 
-    // Build messages: include an extra system-level context with live search results if present
     const messages = [systemMessage];
     if (searchSummary) {
       messages.push({
@@ -74,10 +74,8 @@ export async function POST(req) {
           searchSummary
       });
     }
-
     messages.push({ role: 'user', content: prompt });
 
-    // Call OpenAI with streaming
     const openaiRes = await fetch(OPENAI_BASE, {
       method: 'POST',
       headers: {
