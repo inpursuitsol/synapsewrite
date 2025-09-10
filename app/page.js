@@ -232,7 +232,7 @@ export default function Page() {
                 placeholder="Meta description"
                 className="w-full text-sm border-0 focus:ring-0 mb-4"
               />
-              <div className="prose prose-lg lg:prose-xl max-w-none">
+              <div className="prose prose-xl lg:prose-2xl max-w-none prose-headings:mt-8 prose-headings:mb-4 prose-p:leading-relaxed prose-p:mb-6">
                 {content ? (
                   <ArticlePreview markdown={content} />
                 ) : (
@@ -291,7 +291,7 @@ export default function Page() {
 function ArticlePreview({ markdown }) {
   const lines = markdown.split(/\r?\n/);
   return (
-    <article className="prose lg:prose-xl">
+    <article className="prose lg:prose-2xl">
       {lines.map((line, i) => (
         <p key={i}>{line}</p>
       ))}
