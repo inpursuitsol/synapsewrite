@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Synapsewrite — Streaming Demo</title>
+    <style>
+      body {
+        font-family: system-ui, sans-serif;
+        max-width: 700px;
+        margin: 2rem auto;
+        padding: 1rem;
+        line-height: 1.5;
+        background: #ffffff;
+        color: #111827;
+      }
+      h1 { color: #111827; margin-bottom: .5rem; }
+      textarea {
+        width: 100%;
+        height: 80px;
+        font-size: 14px;
+        margin-bottom: 1rem;
+        padding: .5rem;
+        border: 1px solid #e5e7eb;
+        border-radius: 6px;
+      }
+      button {
+        padding: 0.6rem 1rem;
+        background: #7c3aed;
+        border: none;
+        border-radius: 6px;
+        color: white;
+        cursor: pointer;
+      }
+      button:disabled { background: #d1d5db; cursor: not-allowed; }
+      #out {
+        margin-top: 1.5rem;
+        padding: 1rem;
+        border: 1px solid #e5e7eb;
+        border-radius: 6px;
+        min-height: 120px;
+        white-space: pre-wrap;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, "Roboto Mono", monospace;
+        background: #fafafa;
+      }
+      #status { margin-left: 1rem; font-size: 14px; color: #6b7280; }
+    </style>
+  </head>
+  <body>
+    <h1>Synapsewrite — Streaming Demo</h1>
+    <p>Prompt</p>
+    <textarea
+      id="prompt"
+      placeholder="Write a 300-400 word blog post on how startups can use AI."
+    ></textarea>
+    <br />
+    <button id="startBtn">Generate (Stream)</button>
+    <span id="status"></span>
+
+    <div id="out"></div>
+
+    <!-- include the reusable streaming parser (make sure this path is correct) -->
+    <script src="./streaming-parser.js"></script>
+
+    <script>
+      // Uses streaming-parser.js functions:
+      // - makeAppender(elementOrId)
+      // - streamFetchToAppender(response, appendFn, onDone)
+
+      const startBtn = document.getElementById("startBtn");
+      const out = document.getElementById("out");
+      const status = document.getElementById("status");
+      const promptEl = document.getElementById("prompt");
+
+      // make an appender that writes tokens into #out
+      const append = makeAppender(out);
+
+      async function startStream() {
+        // clear & prepare UI
+        out.textContent = "";
+        status.textContent = "Connecting...";
+        startBtn.disabled = true;
+
+        const promptValue =
+          (promptEl.value || "").trim() ||
+          "Write a 200-word helpful blog post on how early-stage startups can adopt AI quickly and ethically.";
+
+        try {
+          const resp = await fetch("/api/stream", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ prompt: promptValue }),
+          });
+
+          if (!resp.ok) {
+            const txt = await resp.text();
+            out.textContent = "Server error: " + txt;
+            status.textContent = "Error";
+            startBtn.disabled = false;
+            return;
+          }
+
+          // stream body and append tokens live using the parser
+          await streamFetchToAppender(resp, append, () => {
+            status.textContent = "Finished";
+            startBtn.disabled = false;
+          });
+
+          // ensure status if onDone didn't run
+          if (status.textContent !== "Finished") status.textContent = "Finished";
+        } catch (err) {
+          out.textContent = "Request failed: " + (err && err.message ? err.message : String(err));
+          status.textContent = "Error";
+          startBtn.disabled = false;
+        }
+      }
+
+      startBtn.addEventListener("click", startStream);
+    </script>
+  </body>
+</html>
