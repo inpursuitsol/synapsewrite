@@ -1,170 +1,120 @@
-// app/api/stream/route.js
+// app/api/stream/refresh/route.js
 import { NextResponse } from "next/server";
 
 /**
- * Simple SSE -> plain-text proxy for OpenAI streaming responses.
+ * Refresh sources endpoint
+ * - POST { prompt: "Top phones in India 2025" }
+ * - Requires process.env.SERPAPI_KEY (SerpAPI)
  *
- * Accepts POST { prompt, maxTokens? } from the client.
- * Calls OpenAI (streaming) and forwards only the assistant text (delta.content)
- * to the client as plain text chunks (no "data: {...}" wrappers).
- *
- * Requirements:
- *   - Set process.env.OPENAI_API_KEY
+ * Returns:
+ *  { sources: [{url,label,snippet}], confidence: number (0..1), evidenceSummary: string }
  *
  * Notes:
- *   - This implementation is intentionally minimal and safe for small traffic.
- *   - For production, add rate-limiting, auth, logging, and retry behavior.
+ * - Keep quotas in mind; SerpAPI is a paid service for a lot of queries.
+ * - You can replace SerpAPI with another search provider by editing the fetch logic below.
  */
 
-const OPENAI_URL = "https://api.openai.com/v1/chat/completions";
-const OPENAI_MODEL = "gpt-4o-mini-2024-07-18"; // adjust if you use another model
+const SERPAPI_KEY = process.env.SERPAPI_KEY || null;
+const SERPAPI_URL = "https://serpapi.com/search.json";
+
+async function fetchSerpApi(query, options = {}) {
+  const params = new URLSearchParams({
+    engine: "google",
+    q: query,
+    hl: options.hl || "en",
+    gl: options.gl || "in", // geo: India by default
+    num: String(options.num || 6),
+    api_key: SERPAPI_KEY,
+  });
+  const url = `${SERPAPI_URL}?${params.toString()}`;
+
+  const resp = await fetch(url, { method: "GET" });
+  if (!resp.ok) {
+    const txt = await resp.text();
+    throw new Error(`SerpAPI error ${resp.status}: ${txt}`);
+  }
+  return resp.json();
+}
+
+function scoreFromResults(results) {
+  // Simple heuristic: more organic results → higher confidence.
+  // results: array of organic results (may be empty)
+  if (!results || results.length === 0) return 0.15;
+  const n = Math.min(results.length, 5);
+  // base 0.4 + 0.12 per result (capped)
+  return Math.min(0.95, 0.35 + 0.12 * n);
+}
+
+function summarizeTopResults(results) {
+  if (!results || results.length === 0) return "No relevant results found.";
+  // take top 3 titles/snippets and create a short summary sentence
+  const top = results.slice(0, 3);
+  const parts = top.map((r) => {
+    const t = r.title?.replace(/\s+/g, " ").trim() || r.link || "";
+    const s = (r.snippet || r.snippet_highlighted || "").replace(/\s+/g, " ").trim();
+    return s ? `${t}: ${s}` : t;
+  }).filter(Boolean);
+  return parts.join(" — ");
+}
 
 export async function POST(req) {
   try {
-    const body = await req.json().catch(() => ({}));
-    const prompt = body.prompt || "";
-    const maxTokens = body.maxTokens || 800;
-    if (!prompt || !process.env.OPENAI_API_KEY) {
-      return NextResponse.json({ error: "Missing prompt or OPENAI_API_KEY" }, { status: 400 });
+    const payload = await req.json().catch(() => ({}));
+    const prompt = (payload.prompt || "").trim();
+
+    if (!prompt) {
+      return NextResponse.json({ error: "Missing prompt" }, { status: 400 });
     }
 
-    // Build the OpenAI chat request. Keep temperature low for consistent prose.
-    const openaiReqBody = {
-      model: OPENAI_MODEL,
-      // Messages: adjust system/instruction as per your pipeline.
-      messages: [
-        { role: "system", content: "You are a helpful assistant that outputs a clean article followed by a final SEO JSON block. Do NOT output markdown fences or labels. Final block must be valid JSON." },
-        { role: "user", content: prompt },
-      ],
-      max_tokens: maxTokens,
-      temperature: 0.2,
-      stream: true,
-    };
-
-    const openaiRes = await fetch(OPENAI_URL, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
-      },
-      body: JSON.stringify(openaiReqBody),
-    });
-
-    if (!openaiRes.ok) {
-      const errTxt = await openaiRes.text();
-      return NextResponse.json({ error: "OpenAI error", detail: errTxt }, { status: 502 });
+    if (!SERPAPI_KEY) {
+      // graceful fallback: acknowledge missing key so frontend can show a message
+      return NextResponse.json({
+        sources: [],
+        confidence: 0,
+        evidenceSummary: "SERPAPI_KEY not configured on the server. Live searches are disabled.",
+        warning: "SERPAPI_KEY_MISSING",
+      });
     }
 
-    // We'll read OpenAI's SSE stream and forward only the assistant "content" text.
-    const reader = openaiRes.body.getReader();
-    const decoder = new TextDecoder("utf-8");
+    // Build query for searching evidence. We add context to bias results to 2025 + India availability.
+    // Example: "Top phones in India 2025 available in India site:amazon.in OR site:flipkart.com"
+    const searchQuery = `${prompt} 2025 availability India`;
 
-    // This ReadableStream is what we return to the client.
-    const stream = new ReadableStream({
-      async start(controller) {
-        let buffer = ""; // accumulate raw SSE text fragments
-        try {
-          while (true) {
-            const { value, done } = await reader.read();
-            if (done) break;
-            buffer += decoder.decode(value, { stream: true });
+    // fetch SerpAPI
+    let json;
+    try {
+      json = await fetchSerpApi(searchQuery, { hl: "en", gl: "in", num: 6 });
+    } catch (err) {
+      console.error("SerpAPI fetch error:", err.message || err);
+      return NextResponse.json({
+        sources: [],
+        confidence: 0,
+        evidenceSummary: `Search failed: ${err.message || "unknown error"}`,
+        error: err.message || String(err),
+      }, { status: 502 });
+    }
 
-            // Split by newline - incoming data from OpenAI is SSE lines that begin with "data: "
-            const lines = buffer.split(/\r?\n/);
-            // Keep the last partial line in buffer
-            buffer = lines.pop();
+    // SerpAPI returns fields like organic_results, local_results, knowledge_graph, etc.
+    const organic = Array.isArray(json.organic_results) ? json.organic_results : [];
+    // Normalize top results to { url, label, snippet }
+    const sources = organic.slice(0, 5).map((r) => {
+      return {
+        url: r.link || r.url || r.cached_page_url || "",
+        label: r.title || r.displayed_link || r.link || r.url || "",
+        snippet: r.snippet || r.snippet_highlighted || "",
+      };
+    }).filter((s) => s.url);
 
-            for (let line of lines) {
-              line = line.trim();
-              if (!line) continue;
+    const confidence = scoreFromResults(sources);
+    const evidenceSummary = summarizeTopResults(sources);
 
-              // OpenAI SSE lines are of the form: data: {...}
-              if (!line.startsWith("data:")) continue;
-              const payload = line.replace(/^data:\s*/, "");
-
-              // End of stream marker
-              if (payload === "[DONE]") {
-                controller.close();
-                return;
-              }
-
-              // Parse JSON - each chunk is a chat.completion.chunk
-              let parsed;
-              try {
-                parsed = JSON.parse(payload);
-              } catch (e) {
-                // ignore lines we can't parse
-                continue;
-              }
-
-              // Extract assistant delta content (if present)
-              try {
-                const choices = parsed.choices || [];
-                if (choices.length > 0) {
-                  const delta = choices[0].delta || {};
-                  const text = delta.content || ""; // main streaming text
-                  if (text) {
-                    // enqueue plain text (no wrappers)
-                    controller.enqueue(new TextEncoder().encode(text));
-                  }
-                }
-              } catch (e) {
-                // ignore individual parsing errors
-              }
-            }
-          }
-
-          // If we exit loop normally, flush any leftover buffer lines
-          if (buffer) {
-            const leftover = buffer.trim();
-            if (leftover && leftover.startsWith("data:")) {
-              const payload = leftover.replace(/^data:\s*/, "");
-              if (payload !== "[DONE]") {
-                try {
-                  const parsed = JSON.parse(payload);
-                  const choices = parsed.choices || [];
-                  if (choices.length > 0) {
-                    const delta = choices[0].delta || {};
-                    const text = delta.content || "";
-                    if (text) controller.enqueue(new TextEncoder().encode(text));
-                  }
-                } catch (e) {
-                  // ignore
-                }
-              }
-            }
-          }
-
-          controller.close();
-        } catch (error) {
-          // If anything goes wrong, error the stream so the client sees a failure.
-          try {
-            controller.error(error);
-          } catch (e) {
-            /* ignore */
-          }
-        } finally {
-          try {
-            reader.releaseLock();
-          } catch (e) {}
-        }
-      },
-      cancel(reason) {
-        // client cancelled - nothing special to do here
-      },
-    });
-
-    // Return the stream with plain text content-type so client receives readable text chunks
-    return new Response(stream, {
-      status: 200,
-      headers: {
-        "Content-Type": "text/plain; charset=utf-8",
-        // no-cache to avoid proxies holding streaming responses
-        "Cache-Control": "no-cache, no-transform",
-      },
+    return NextResponse.json({
+      sources,
+      confidence,
+      evidenceSummary,
     });
   } catch (err) {
-    console.error("Stream route error:", err);
+    console.error("Refresh route error:", err);
     return NextResponse.json({ error: "Internal server error", detail: err.message }, { status: 500 });
   }
 }
