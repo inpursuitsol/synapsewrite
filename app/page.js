@@ -37,7 +37,7 @@ export default function Page() {
     if (!meta) s.push("Write a 1-sentence meta description (120–160 characters) summarizing the article.");
     else if (meta.length < 80) s.push("Meta seems short — expand to around 120–160 characters.");
 
-    const words = bodyText.split(/\s+/).filter(Boolean).length;
+    const words = (bodyText || "").split(/\s+/).filter(Boolean).length;
     if (words < 400) s.push("Article is short — aim for at least 600 words for better SEO.");
     else if (words < 700) s.push("Good length — consider adding one more example or a short checklist to improve depth.");
 
@@ -45,6 +45,36 @@ export default function Page() {
     if (!sources || sources.length === 0) s.push("Add 2–3 sources or references to improve trust and search performance.");
 
     return s;
+  }
+
+  // Refresh sources endpoint caller — updates seo and suggestions
+  async function handleRefreshSources() {
+    if (!prompt.trim()) return;
+    setStatusMessage("Refreshing sources...");
+    try {
+      const r = await fetch("/api/stream/refresh", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ prompt }),
+      });
+      if (!r.ok) {
+        const txt = await r.text();
+        setStatusMessage("Failed to refresh sources: " + txt.slice(0, 200));
+        return;
+      }
+      const data = await r.json();
+      // expected { sources: [...], confidence: 0.8, evidenceSummary: "..." }
+      const updatedSeo = {
+        ...(seo || {}),
+        sources: data.sources || [],
+        confidence: data.confidence ?? (seo && seo.confidence),
+      };
+      setSeo(updatedSeo);
+      setSuggestions(generateFriendlySuggestions(updatedSeo, article));
+      setStatusMessage("Sources refreshed");
+    } catch (e) {
+      setStatusMessage("Failed to refresh sources: " + (e.message || "error"));
+    }
   }
 
   async function handleGenerate(e) {
@@ -114,11 +144,24 @@ export default function Page() {
           }
         : null;
 
+      // --- set initial SEO and suggestions ---
       setSeo(normalizedSeo);
       setSuggestions(generateFriendlySuggestions(normalizedSeo, body));
-      setStatusMessage(
-        normalizedSeo ? "Done — article generated. Review the suggested quick edits in the right panel." : "Done — generated article but no SEO metadata found."
-      );
+
+      // If the model did not include sources, auto-trigger a live search to fetch them.
+      if (!normalizedSeo || !Array.isArray(normalizedSeo.sources) || normalizedSeo.sources.length === 0) {
+        setStatusMessage("Done — generated article. Fetching live sources...");
+        try {
+          // await so UI updates sequentially and suggestions update after sources arrive
+          await handleRefreshSources();
+          setStatusMessage("Done — article generated and sources fetched. Review quick edits in the right panel.");
+        } catch (e) {
+          // handleRefreshSources already sets status messages on failure; provide fallback
+          setStatusMessage("Article generated. Could not fetch live sources automatically — try clicking Refresh sources.");
+        }
+      } else {
+        setStatusMessage("Done — article generated. Review the suggested quick edits in the right panel.");
+      }
     } catch (err) {
       if (err.name === "AbortError") setStatusMessage("Generation cancelled.");
       else setStatusMessage("Generation failed: " + (err.message || "unknown error"));
@@ -134,25 +177,6 @@ export default function Page() {
     if (score >= 75) return { label: "Ready to publish", tone: "green" };
     if (score >= 50) return { label: "Almost ready", tone: "amber" };
     return { label: "Needs edits", tone: "red" };
-  }
-
-  async function handleRefreshSources() {
-    if (!prompt.trim()) return;
-    setStatusMessage("Refreshing sources...");
-    try {
-      const r = await fetch("/api/stream/refresh", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ prompt }),
-      });
-      const data = await r.json();
-      const updatedSeo = { ...(seo || {}), sources: data.sources || [], confidence: data.confidence ?? (seo && seo.confidence) };
-      setSeo(updatedSeo);
-      setSuggestions(generateFriendlySuggestions(updatedSeo, article));
-      setStatusMessage("Sources refreshed");
-    } catch (e) {
-      setStatusMessage("Failed to refresh sources: " + (e.message || "error"));
-    }
   }
 
   return (
@@ -232,6 +256,7 @@ export default function Page() {
                         <a className="text-blue-600 underline" href={src.url} target="_blank" rel="noreferrer">
                           {src.label || src.url}
                         </a>
+                        {src.snippet ? <div className="text-xs text-gray-500 mt-1">{src.snippet}</div> : null}
                       </li>
                     ))}
                   </ol>
