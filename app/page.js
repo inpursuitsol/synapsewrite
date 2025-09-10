@@ -4,6 +4,7 @@ import React, { useState, useRef } from "react";
 export default function Page() {
   const [prompt, setPrompt] = useState("");
   const [loading, setLoading] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
   const [article, setArticle] = useState("");
   const [seo, setSeo] = useState(null);
   const [suggestions, setSuggestions] = useState([]);
@@ -49,19 +50,29 @@ export default function Page() {
 
   // Refresh sources endpoint caller — updates seo and suggestions
   async function handleRefreshSources() {
-    if (!prompt.trim()) return;
+    // Allow refresh even if prompt is empty: fall back to article text or return with message
+    const query = prompt && prompt.trim() ? prompt.trim() : (article && article.slice(0, 250)) || "";
+    if (!query) {
+      setStatusMessage("Nothing to search for — enter a prompt or generate an article first.");
+      return;
+    }
+
+    setRefreshing(true);
     setStatusMessage("Refreshing sources...");
     try {
       const r = await fetch("/api/stream/refresh", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ prompt }),
+        body: JSON.stringify({ prompt: query }),
       });
+
       if (!r.ok) {
         const txt = await r.text();
-        setStatusMessage("Failed to refresh sources: " + txt.slice(0, 200));
+        setStatusMessage("Refresh failed: " + txt.slice(0, 300));
+        setRefreshing(false);
         return;
       }
+
       const data = await r.json();
       // expected { sources: [...], confidence: 0.8, evidenceSummary: "..." }
       const updatedSeo = {
@@ -71,9 +82,11 @@ export default function Page() {
       };
       setSeo(updatedSeo);
       setSuggestions(generateFriendlySuggestions(updatedSeo, article));
-      setStatusMessage("Sources refreshed");
+      setStatusMessage(data.evidenceSummary ? data.evidenceSummary : "Sources refreshed");
     } catch (e) {
       setStatusMessage("Failed to refresh sources: " + (e.message || "error"));
+    } finally {
+      setRefreshing(false);
     }
   }
 
@@ -266,8 +279,12 @@ export default function Page() {
               </div>
 
               <div className="mt-4 flex gap-2">
-                <button className="flex-1 px-3 py-2 rounded-md border" onClick={handleRefreshSources}>
-                  Refresh sources
+                <button
+                  className={`flex-1 px-3 py-2 rounded-md border ${refreshing || loading ? "opacity-60 cursor-wait" : "hover:bg-gray-50"}`}
+                  onClick={handleRefreshSources}
+                  disabled={refreshing || loading}
+                >
+                  {refreshing ? "Fetching..." : "Refresh sources"}
                 </button>
                 <button
                   className="flex-1 px-3 py-2 rounded-md bg-blue-600 text-white"
