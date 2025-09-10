@@ -1,17 +1,26 @@
 "use client";
 import React, { useState, useRef } from "react";
 
+/**
+ * app/page.js
+ * - Auto-refreshes sources after generation if none returned by model
+ * - Robust handleRefreshSources integrates { sources, confidence, evidenceSummary, warning }
+ * - Human-friendly confidence display
+ * - Reliable Copy Markdown with fallback
+ * Drop-in: replace your existing app/page.js with this file.
+ */
+
 export default function Page() {
   const [prompt, setPrompt] = useState("");
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [article, setArticle] = useState("");
-  const [seo, setSeo] = useState(null);
+  const [seo, setSeo] = useState(null); // will hold { title, meta, sources, confidence, evidenceSummary, warning, score }
   const [suggestions, setSuggestions] = useState([]);
   const [statusMessage, setStatusMessage] = useState("");
   const controllerRef = useRef(null);
 
-  // Helper: strip the trailing SEO JSON block (if present) and return { body, seoObj }
+  // ---------- Helpers ----------
   function extractSeoBlock(streamText) {
     const jsonMatch = streamText.match(/\{[\s\S]*\}\s*$/);
     if (!jsonMatch) return { body: streamText.trim(), seoObj: null };
@@ -20,14 +29,12 @@ export default function Page() {
     try {
       seoObj = JSON.parse(jsonText);
     } catch (e) {
-      // not valid JSON — ignore
       return { body: streamText.replace(jsonText, "").trim(), seoObj: null };
     }
     const body = streamText.replace(jsonText, "").trim();
     return { body, seoObj };
   }
 
-  // Friendly suggestion generator
   function generateFriendlySuggestions(seoObj, bodyText) {
     const s = [];
     const title = (seoObj && seoObj.title) || "";
@@ -48,30 +55,24 @@ export default function Page() {
     return s;
   }
 
-  // ====== Helper: human-friendly confidence formatting ======
+  // Format confidence: accepts 0..1 or 0..100; returns string like "82%"
   function formatConfidence(conf) {
-    // conf may be a decimal 0..1 or a percent 0..100 — handle both
     if (conf === null || conf === undefined) return "—";
     const n = Number(conf);
     if (Number.isNaN(n)) return "—";
     let pct = n;
-    if (pct <= 1.2) pct = Math.round(pct * 100); // treat as 0..1 decimal
-    else pct = Math.round(pct); // already percent
+    if (pct <= 1.2) pct = Math.round(pct * 100);
+    else pct = Math.round(pct);
     return `${pct}%`;
   }
 
   function confidenceExplanation(conf) {
-    if (conf === null || conf === undefined) {
-      return "Confidence unavailable — refresh sources to compute evidence-backed confidence.";
-    }
-    // short explanation
-    const pctText = formatConfidence(conf);
-    return `${pctText} — heuristic estimate of how well available sources support this draft. Higher is better; it's not a 'grade'.`;
+    if (conf === null || conf === undefined) return "Confidence unavailable — refresh sources to compute evidence-backed confidence.";
+    return `${formatConfidence(conf)} — a heuristic estimate of how well available sources support this draft.`;
   }
 
-  // Refresh sources endpoint caller — updates seo and suggestions
+  // ---------- Refresh sources (calls backend route /api/stream/refresh) ----------
   async function handleRefreshSources() {
-    // Allow refresh even if prompt is empty: fall back to article text or return with message
     const query = prompt && prompt.trim() ? prompt.trim() : (article && article.slice(0, 250)) || "";
     if (!query) {
       setStatusMessage("Nothing to search for — enter a prompt or generate an article first.");
@@ -95,16 +96,20 @@ export default function Page() {
       }
 
       const data = await r.json();
-      // expected { sources: [...], confidence: 0.8, evidenceSummary: "..." }
+      // Merge returned fields into seo state
       const updatedSeo = {
         ...(seo || {}),
         sources: data.sources || [],
-        // store raw confidence as returned (we format in UI)
         confidence: data.confidence ?? (seo && seo.confidence) ?? null,
+        evidenceSummary: data.evidenceSummary || null,
+        warning: data.warning || null,
       };
       setSeo(updatedSeo);
       setSuggestions(generateFriendlySuggestions(updatedSeo, article));
-      setStatusMessage(data.evidenceSummary ? data.evidenceSummary : "Sources refreshed");
+      // Display short evidenceSummary or fallback message
+      if (data.evidenceSummary) setStatusMessage(data.evidenceSummary);
+      else if (data.warning) setStatusMessage(`Warning: ${data.warning}`);
+      else setStatusMessage("Sources refreshed");
     } catch (e) {
       setStatusMessage("Failed to refresh sources: " + (e.message || "error"));
     } finally {
@@ -112,7 +117,7 @@ export default function Page() {
     }
   }
 
-  // Robust copy-to-clipboard with fallback
+  // ---------- Copy Markdown (robust) ----------
   async function copyArticleAsMarkdown() {
     if (!article) {
       setStatusMessage("Nothing to copy — generate an article first.");
@@ -121,18 +126,16 @@ export default function Page() {
     const md = `# ${seo?.title || "Untitled"}\n\n${article}`;
     setStatusMessage("Copying article...");
     try {
-      // try modern clipboard API
       if (navigator.clipboard && navigator.clipboard.writeText) {
         await navigator.clipboard.writeText(md);
         setStatusMessage("Copied article to clipboard (Markdown).");
         return;
       }
     } catch (e) {
-      // fallthrough to fallback
       console.warn("Clipboard API failed:", e?.message || e);
     }
 
-    // fallback: textarea + execCommand
+    // Fallback
     try {
       const ta = document.createElement("textarea");
       ta.value = md;
@@ -144,16 +147,14 @@ export default function Page() {
       ta.setSelectionRange(0, ta.value.length);
       const ok = document.execCommand("copy");
       document.body.removeChild(ta);
-      if (ok) {
-        setStatusMessage("Copied article to clipboard (Markdown).");
-      } else {
-        setStatusMessage("Copy failed — your browser blocked clipboard access.");
-      }
+      if (ok) setStatusMessage("Copied article to clipboard (Markdown).");
+      else setStatusMessage("Copy failed — your browser blocked clipboard access.");
     } catch (e) {
       setStatusMessage("Copy failed: " + (e.message || "unknown error"));
     }
   }
 
+  // ---------- Generate (stream) ----------
   async function handleGenerate(e) {
     e?.preventDefault();
     if (!prompt.trim()) {
@@ -184,7 +185,6 @@ export default function Page() {
         return;
       }
 
-      // Read the streaming body and incrementally update the article
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
       let done = false;
@@ -195,14 +195,11 @@ export default function Page() {
         done = streamDone;
         if (value) {
           accumulated += decoder.decode(value, { stream: true });
-
-          // Update the article area progressively but hide any trailing JSON block until complete
           const { body } = extractSeoBlock(accumulated);
           setArticle(body);
         }
       }
 
-      // Final parse for SEO block
       const { body, seoObj } = extractSeoBlock(accumulated + "\n");
       setArticle(body || "(No article body returned)");
 
@@ -221,19 +218,16 @@ export default function Page() {
           }
         : null;
 
-      // --- set initial SEO and suggestions ---
       setSeo(normalizedSeo);
       setSuggestions(generateFriendlySuggestions(normalizedSeo, body));
 
-      // If the model did not include sources, auto-trigger a live search to fetch them.
+      // Auto-refresh if no sources included by model
       if (!normalizedSeo || !Array.isArray(normalizedSeo.sources) || normalizedSeo.sources.length === 0) {
         setStatusMessage("Done — generated article. Fetching live sources...");
         try {
-          // await so UI updates sequentially and suggestions update after sources arrive
           await handleRefreshSources();
           setStatusMessage("Done — article generated and sources fetched. Review quick edits in the right panel.");
         } catch (e) {
-          // handleRefreshSources already sets status messages on failure; provide fallback
           setStatusMessage("Article generated. Could not fetch live sources automatically — try clicking Refresh sources.");
         }
       } else {
@@ -247,6 +241,7 @@ export default function Page() {
     }
   }
 
+  // ---------- Publish readiness ----------
   function getPublishReadiness() {
     if (!seo) return { label: "Needs review", tone: "amber" };
     const score = seo.score || (seo.confidence ? Math.round(seo.confidence * 100) : null);
@@ -256,6 +251,7 @@ export default function Page() {
     return { label: "Needs edits", tone: "red" };
   }
 
+  // ---------- Render ----------
   return (
     <div className="min-h-screen bg-gray-50 p-6">
       <div className="max-w-7xl mx-auto">
@@ -274,7 +270,10 @@ export default function Page() {
                   onChange={(e) => setPrompt(e.target.value)}
                   placeholder="e.g. Top phones in India 2025 — buyer guide"
                 />
-                <button className={`px-4 py-2 rounded-md font-medium ${loading ? "bg-gray-400" : "bg-blue-600 text-white"}`} disabled={loading}>
+                <button
+                  className={`px-4 py-2 rounded-md font-medium ${loading ? "bg-gray-400" : "bg-blue-600 text-white"}`}
+                  disabled={loading}
+                >
                   {loading ? "Generating..." : "Generate"}
                 </button>
                 <button
@@ -312,7 +311,15 @@ export default function Page() {
                   <div className="text-xs text-gray-400 mt-1">{confidenceExplanation(seo?.confidence)}</div>
                 </div>
                 <div>
-                  <div className={`px-3 py-1 rounded-full text-sm font-medium ${getPublishReadiness().tone === "green" ? "bg-green-100 text-green-800" : getPublishReadiness().tone === "amber" ? "bg-amber-100 text-amber-800" : "bg-red-100 text-red-800"}`}>
+                  <div
+                    className={`px-3 py-1 rounded-full text-sm font-medium ${
+                      getPublishReadiness().tone === "green"
+                        ? "bg-green-100 text-green-800"
+                        : getPublishReadiness().tone === "amber"
+                        ? "bg-amber-100 text-amber-800"
+                        : "bg-red-100 text-red-800"
+                    }`}
+                  >
                     {getPublishReadiness().label}
                   </div>
                 </div>
@@ -327,12 +334,13 @@ export default function Page() {
 
               <hr className="my-4" />
 
+              {/* Sources block */}
               <h4 className="font-medium">Sources</h4>
               <div className="mt-2 text-sm text-gray-600">
                 {seo && seo.sources && seo.sources.length ? (
                   <ol className="list-decimal list-inside">
                     {seo.sources.map((src, i) => (
-                      <li key={i} className="truncate max-w-[12rem]">
+                      <li key={i} className="truncate max-w-[14rem]">
                         <a className="text-blue-600 underline" href={src.url} target="_blank" rel="noreferrer">
                           {src.label || src.url}
                         </a>
@@ -340,6 +348,10 @@ export default function Page() {
                       </li>
                     ))}
                   </ol>
+                ) : seo && seo.warning ? (
+                  <div className="text-xs text-amber-700">Warning: {seo.warning}. Live search disabled on server.</div>
+                ) : seo && seo.evidenceSummary ? (
+                  <div className="text-xs text-gray-600">{seo.evidenceSummary}</div>
                 ) : (
                   <div>No sources found. Click refresh to fetch sources.</div>
                 )}
@@ -353,6 +365,7 @@ export default function Page() {
                 >
                   {refreshing ? "Fetching..." : "Refresh sources"}
                 </button>
+
                 <button
                   className={`flex-1 px-3 py-2 rounded-md ${!article ? "bg-gray-300 text-gray-600 cursor-not-allowed" : "bg-blue-600 text-white"}`}
                   onClick={() => copyArticleAsMarkdown()}
