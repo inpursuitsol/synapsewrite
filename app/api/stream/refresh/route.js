@@ -1,40 +1,27 @@
 // app/api/stream/refresh/route.js
 /**
- * Cached Refresh Sources endpoint with:
- * - Redis-backed cache (if REDIS_URL provided) or in-memory fallback
- * - Per-IP rate-limiting using Redis or in-memory fallback
+ * Cached Refresh Sources endpoint (in-memory only):
+ * - POST { prompt }
+ * - Uses in-memory Map cache with TTL to reduce SerpAPI calls
+ * - Per-IP in-memory rate-limiting fallback
  * - Calibrated confidence heuristic
  * - Structured logging via sendLog()
  *
  * Env:
  *  - SERPAPI_KEY (recommended)
- *  - REDIS_URL (optional)
  *  - CACHE_TTL (seconds, default 600)
  *  - RATE_LIMIT_MAX (default 10)
  *  - RATE_LIMIT_WINDOW (seconds, default 60)
  */
 
 import { NextResponse } from "next/server";
-import Redis from "ioredis";
-import { sendLog } from "@/lib/logger";
+import { sendLog } from "../../../../lib/logger";
 
 const SERPAPI_KEY = process.env.SERPAPI_KEY || null;
 const SERPAPI_URL = "https://serpapi.com/search.json";
 const CACHE_TTL = Number(process.env.CACHE_TTL || 600); // seconds
 const RATE_LIMIT_MAX = Number(process.env.RATE_LIMIT_MAX || 10);
 const RATE_LIMIT_WINDOW = Number(process.env.RATE_LIMIT_WINDOW || 60); // seconds
-
-const REDIS_URL = process.env.REDIS_URL || null;
-let redis = null;
-if (REDIS_URL) {
-  try {
-    redis = new Redis(REDIS_URL);
-    redis.on("error", (e) => console.error("[redis] error:", e?.message || e));
-  } catch (e) {
-    console.warn("[redis] init failed:", e?.message || e);
-    redis = null;
-  }
-}
 
 // in-memory fallback storage
 const inMemoryCache = new Map();
@@ -44,38 +31,18 @@ function cacheKeyForPrompt(prompt) {
 }
 
 async function getCached(key) {
-  if (redis) {
-    try {
-      const raw = await redis.get(key);
-      if (!raw) return null;
-      return JSON.parse(raw);
-    } catch (e) {
-      console.warn("[cache] redis get failed:", e?.message || e);
-      return null;
-    }
-  } else {
-    const entry = inMemoryCache.get(key);
-    if (!entry) return null;
-    if (entry.expires < Date.now()) {
-      inMemoryCache.delete(key);
-      console.log("[cache] expired ->", key);
-      return null;
-    }
-    console.log("[cache] hit ->", key);
-    return entry.value;
+  const entry = inMemoryCache.get(key);
+  if (!entry) return null;
+  if (entry.expires < Date.now()) {
+    inMemoryCache.delete(key);
+    console.log("[cache] expired ->", key);
+    return null;
   }
+  console.log("[cache] hit ->", key);
+  return entry.value;
 }
 
 async function setCached(key, value, ttlSeconds = CACHE_TTL) {
-  if (redis) {
-    try {
-      await redis.set(key, JSON.stringify(value), "EX", ttlSeconds);
-      return;
-    } catch (e) {
-      console.warn("[cache] redis set failed:", e?.message || e);
-    }
-  }
-  // in-memory fallback
   inMemoryCache.set(key, { expires: Date.now() + ttlSeconds * 1000, value });
   console.log("[cache] set (memory) ->", key, "ttl(s):", ttlSeconds);
 }
@@ -85,26 +52,15 @@ async function checkRateLimit(req) {
   const ip = forwarded ? forwarded.split(",")[0].trim() : req.headers.get("x-real-ip") || "unknown";
   const rlKey = `rl_refresh:${ip}`;
 
-  try {
-    if (redis) {
-      const current = await redis.incr(rlKey);
-      if (current === 1) await redis.expire(rlKey, RATE_LIMIT_WINDOW);
-      return { allowed: current <= RATE_LIMIT_MAX, remaining: Math.max(0, RATE_LIMIT_MAX - current), current, ip };
-    } else {
-      const entry = inMemoryCache.get(rlKey) || { count: 0, expiresAt: Date.now() + RATE_LIMIT_WINDOW * 1000 };
-      if (Date.now() > entry.expiresAt) {
-        entry.count = 1;
-        entry.expiresAt = Date.now() + RATE_LIMIT_WINDOW * 1000;
-      } else {
-        entry.count += 1;
-      }
-      inMemoryCache.set(rlKey, entry);
-      return { allowed: entry.count <= RATE_LIMIT_MAX, remaining: Math.max(0, RATE_LIMIT_MAX - entry.count), current: entry.count, ip };
-    }
-  } catch (e) {
-    console.warn("[rate] check failed, allowing request:", e?.message || e);
-    return { allowed: true, remaining: RATE_LIMIT_MAX, current: 0, ip: "unknown" };
+  const entry = inMemoryCache.get(rlKey) || { count: 0, expiresAt: Date.now() + RATE_LIMIT_WINDOW * 1000 };
+  if (Date.now() > entry.expiresAt) {
+    entry.count = 1;
+    entry.expiresAt = Date.now() + RATE_LIMIT_WINDOW * 1000;
+  } else {
+    entry.count += 1;
   }
+  inMemoryCache.set(rlKey, entry);
+  return { allowed: entry.count <= RATE_LIMIT_MAX, remaining: Math.max(0, RATE_LIMIT_MAX - entry.count), current: entry.count, ip };
 }
 
 async function fetchSerpApi(query, options = {}) {
