@@ -2,21 +2,18 @@
 import React, { useState, useRef } from "react";
 
 /**
- * Full app/page.js — polished UI with:
- * - Generation (streaming + fallback handled server-side)
- * - Editable SEO title + meta
- * - Refresh sources spinner + in-memory refresh route integration
- * - Read time calculation
- * - Copy Markdown with fallback
- * - Compact Pricing CTA (modal + checkout placeholder)
+ * Full app/page.js — UI polish + Stripe Checkout wiring
  *
- * Drop-in: replace your current app/page.js with this file.
+ * Notes:
+ * - Upgrade to Pro uses POST /api/checkout which creates a Stripe Checkout session
+ * - Replace /api/checkout with your payment flow if you use a different gateway
  */
 
-/* ----------------- Pricing CTA component ----------------- */
+/* ----------------- Pricing CTA component (uses POST /api/checkout) ----------------- */
 function PricingCTA({ onTrack } = {}) {
   const [open, setOpen] = React.useState(false);
   const [plan, setPlan] = React.useState("pro");
+  const [busy, setBusy] = React.useState(false);
 
   function openModal(sel) {
     setPlan(sel || "pro");
@@ -27,12 +24,42 @@ function PricingCTA({ onTrack } = {}) {
     console.log("Pricing modal opened", sel || "pro");
   }
 
+  async function handleCheckoutApi(selectedPlan) {
+    setBusy(true);
+    try {
+      const res = await fetch("/api/checkout", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ plan: selectedPlan }),
+      });
+      if (!res.ok) {
+        const txt = await res.text();
+        console.error("Checkout API error:", res.status, txt);
+        alert("Payment initialization failed. Check console for details.");
+        setBusy(false);
+        return;
+      }
+      const data = await res.json();
+      if (data.url) {
+        // redirect to Stripe Checkout
+        window.location.href = data.url;
+      } else {
+        alert("Payment initialization failed (no redirect).");
+      }
+    } catch (err) {
+      console.error("Checkout error", err);
+      alert("Payment initialization failed. Try again.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   function handleCheckout() {
-    const checkoutUrl = `/checkout?plan=${plan}`;
+    // Default to Pro plan on CTA click
+    handleCheckoutApi(plan);
     try {
       if (typeof onTrack === "function") onTrack({ event: "pricing.checkout", plan });
     } catch (e) {}
-    window.location.href = checkoutUrl;
   }
 
   return (
@@ -41,7 +68,7 @@ function PricingCTA({ onTrack } = {}) {
         <div className="flex items-center justify-between">
           <div>
             <div className="text-sm font-semibold">SynapseWrite Pro</div>
-            <div className="text-xs text-gray-500">Faster drafts, unlimited exports</div>
+            <div className="text-xs text-gray-500">Faster drafts, priority refresh, and export tools</div>
           </div>
           <div className="text-right">
             <div className="text-sm font-medium">From</div>
@@ -53,18 +80,19 @@ function PricingCTA({ onTrack } = {}) {
 
         <div className="mt-3 text-xs text-gray-600">
           <ul className="list-disc pl-4 space-y-1">
-            <li>Unlimited Refresh Sources</li>
-            <li>Priority generation & caching</li>
-            <li>One-click export (WP)</li>
+            <li>Priority refresh sources and caching</li>
+            <li>Faster generation throughput</li>
+            <li>One-click export to WordPress</li>
           </ul>
         </div>
 
         <div className="mt-3 flex gap-2">
           <button
-            className="flex-1 px-3 py-2 rounded-md bg-blue-600 text-white text-sm"
-            onClick={() => openModal("pro")}
+            className="flex-1 px-3 py-2 rounded-md bg-blue-600 text-white text-sm disabled:opacity-60"
+            onClick={() => handleCheckoutApi("pro")}
+            disabled={busy}
           >
-            Upgrade to Pro
+            {busy ? "Preparing checkout..." : "Upgrade to Pro"}
           </button>
           <button
             className="px-3 py-2 rounded-md border text-sm"
@@ -82,7 +110,7 @@ function PricingCTA({ onTrack } = {}) {
             <div className="flex items-start justify-between">
               <div>
                 <div className="text-lg font-semibold">Choose a plan</div>
-                <div className="text-xs text-gray-500">Start with free or upgrade to Pro.</div>
+                <div className="text-xs text-gray-500">Try free or upgrade to Pro for heavy use.</div>
               </div>
               <button className="text-gray-400" onClick={() => setOpen(false)}>✕</button>
             </div>
@@ -91,8 +119,8 @@ function PricingCTA({ onTrack } = {}) {
               <label className={`block p-3 rounded-md border ${plan === "starter" ? "border-blue-500 bg-blue-50" : "bg-white"}`}>
                 <input type="radio" name="plan" checked={plan === "starter"} onChange={() => setPlan("starter")} />
                 <span className="ml-2 inline-block align-middle">
-                  <div className="text-sm font-medium">Starter (Free)</div>
-                  <div className="text-xs text-gray-500">2 generations/day, limited refreshes</div>
+                  <div className="text-sm font-medium">Starter — Free tier</div>
+                  <div className="text-xs text-gray-500">Limited use for casual writers — try before upgrading</div>
                 </span>
               </label>
 
@@ -100,7 +128,7 @@ function PricingCTA({ onTrack } = {}) {
                 <input type="radio" name="plan" checked={plan === "pro"} onChange={() => setPlan("pro")} />
                 <span className="ml-2 inline-block align-middle">
                   <div className="text-sm font-medium">Pro — ₹499 / month</div>
-                  <div className="text-xs text-gray-500">Unlimited generations, priority refresh, WP export</div>
+                  <div className="text-xs text-gray-500">Unlimited use, priority refresh, exports & team features</div>
                 </span>
               </label>
             </div>
@@ -109,8 +137,8 @@ function PricingCTA({ onTrack } = {}) {
               <div className="text-xs text-gray-500">Secure checkout • Cancel anytime</div>
               <div className="flex gap-2">
                 <button className="px-3 py-2 rounded-md border text-sm" onClick={() => setOpen(false)}>Cancel</button>
-                <button className="px-3 py-2 rounded-md bg-green-600 text-white text-sm" onClick={handleCheckout}>
-                  Checkout
+                <button className="px-3 py-2 rounded-md bg-green-600 text-white text-sm" onClick={() => handleCheckoutApi(plan)} disabled={busy}>
+                  {busy ? "Preparing..." : "Proceed to Checkout"}
                 </button>
               </div>
             </div>
@@ -124,17 +152,17 @@ function PricingCTA({ onTrack } = {}) {
 /* ----------------- Main Page component ----------------- */
 export default function Page() {
   const [prompt, setPrompt] = useState("");
-  const [loading, setLoading] = useState(false); // generation running
-  const [refreshing, setRefreshing] = useState(false); // refresh running (shows spinner)
+  const [loading, setLoading] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
   const [article, setArticle] = useState("");
-  const [seo, setSeo] = useState(null); // { title, meta, sources, confidence, evidenceSummary, warning, score }
+  const [seo, setSeo] = useState(null);
   const [editableTitle, setEditableTitle] = useState("");
   const [editableMeta, setEditableMeta] = useState("");
   const [suggestions, setSuggestions] = useState([]);
   const [statusMessage, setStatusMessage] = useState("");
   const controllerRef = useRef(null);
 
-  // Helper: strip the trailing SEO JSON block (if present) and return { body, seoObj }
+  // Helper functions (same as prior polished version)
   function extractSeoBlock(streamText) {
     const jsonMatch = (streamText || "").match(/\{[\s\S]*\}\s*$/);
     if (!jsonMatch) return { body: (streamText || "").trim(), seoObj: null };
@@ -148,28 +176,25 @@ export default function Page() {
     }
   }
 
-  // Friendly suggestion generator
   function generateFriendlySuggestions(seoObj, bodyText) {
     const s = [];
     const title = (seoObj && seoObj.title) || "";
     if (!title) s.push("Add a short, catchy title (50–60 characters).");
-    else if (title.length > 80) s.push("Your title is long — aim for ~60 characters for better search display.");
+    else if (title.length > 80) s.push("Your title is long — aim for ~60 characters.");
 
     const meta = (seoObj && seoObj.meta) || "";
-    if (!meta) s.push("Write a 1-sentence meta description (120–160 characters) summarizing the article.");
-    else if (meta.length < 80) s.push("Meta seems short — expand to around 120–160 characters.");
+    if (!meta) s.push("Write a 1-sentence meta description (120–160 characters).");
+    else if (meta.length < 80) s.push("Meta seems short — expand to ~120–160 characters.");
 
     const words = (bodyText || "").split(/\s+/).filter(Boolean).length;
     if (words < 400) s.push("Article is short — aim for at least 600 words for better SEO.");
-    else if (words < 700) s.push("Good length — consider adding one more example or a short checklist to improve depth.");
 
     const sources = (seoObj && seoObj.sources) || [];
-    if (!sources || sources.length === 0) s.push("Add 2–3 sources or references to improve trust and search performance.");
+    if (!sources || sources.length === 0) s.push("Add 2–3 sources or references to improve trust.");
 
     return s;
   }
 
-  // ====== Helper: human-friendly confidence formatting ======
   function formatConfidence(conf) {
     if (conf === null || conf === undefined) return "—";
     const n = Number(conf);
@@ -179,14 +204,10 @@ export default function Page() {
     else pct = Math.round(pct);
     return `${pct}%`;
   }
-
   function confidenceExplanation(conf) {
-    if (conf === null || conf === undefined) {
-      return "Confidence unavailable — refresh sources to compute evidence-backed confidence.";
-    }
+    if (conf === null || conf === undefined) return "Confidence unavailable — refresh sources to compute evidence-backed confidence.";
     return `${formatConfidence(conf)} — a heuristic estimate of how well available sources support this draft.`;
   }
-
   function computeReadTime(bodyText) {
     if (!bodyText) return null;
     const words = (bodyText || "").split(/\s+/).filter(Boolean).length;
@@ -194,14 +215,12 @@ export default function Page() {
     return { words, minutes };
   }
 
-  // Refresh sources endpoint caller — updates seo and suggestions
   async function handleRefreshSources() {
     const query = prompt && prompt.trim() ? prompt.trim() : (article && article.slice(0, 250)) || "";
     if (!query) {
       setStatusMessage("Nothing to search for — enter a prompt or generate an article first.");
       return;
     }
-
     setRefreshing(true);
     setStatusMessage("Refreshing sources...");
     try {
@@ -210,14 +229,12 @@ export default function Page() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ prompt: query }),
       });
-
       if (!r.ok) {
         const txt = await r.text();
         setStatusMessage("Refresh failed: " + txt.slice(0, 300));
         setRefreshing(false);
         return;
       }
-
       const data = await r.json();
       const updatedSeo = {
         ...(seo || {}),
@@ -229,11 +246,8 @@ export default function Page() {
         warning: data.warning || null,
       };
       setSeo(updatedSeo);
-
-      // if user has not made manual edits, populate the editable fields with returned SEO fields
       if (!editableTitle) setEditableTitle(updatedSeo.title || "");
       if (!editableMeta) setEditableMeta(updatedSeo.meta || "");
-
       setSuggestions(generateFriendlySuggestions(updatedSeo, article));
       if (data.evidenceSummary) setStatusMessage(data.evidenceSummary);
       else if (data.warning) setStatusMessage(`Warning: ${data.warning}`);
@@ -245,7 +259,6 @@ export default function Page() {
     }
   }
 
-  // Robust copy-to-clipboard with fallback
   async function copyArticleAsMarkdown() {
     if (!article) {
       setStatusMessage("Nothing to copy — generate an article first.");
@@ -262,8 +275,6 @@ export default function Page() {
     } catch (e) {
       console.warn("Clipboard API failed:", e?.message || e);
     }
-
-    // fallback: textarea + execCommand
     try {
       const ta = document.createElement("textarea");
       ta.value = md;
@@ -275,17 +286,13 @@ export default function Page() {
       ta.setSelectionRange(0, ta.value.length);
       const ok = document.execCommand("copy");
       document.body.removeChild(ta);
-      if (ok) {
-        setStatusMessage("Copied article to clipboard (Markdown).");
-      } else {
-        setStatusMessage("Copy failed — your browser blocked clipboard access.");
-      }
+      if (ok) setStatusMessage("Copied article to clipboard (Markdown).");
+      else setStatusMessage("Copy failed — your browser blocked clipboard access.");
     } catch (e) {
       setStatusMessage("Copy failed: " + (e.message || "unknown error"));
     }
   }
 
-  // Main generation flow (calls /api/stream which we made robust server-side)
   async function handleGenerate(e) {
     e?.preventDefault();
     if (!prompt.trim()) {
@@ -310,7 +317,6 @@ export default function Page() {
         body: JSON.stringify({ prompt, maxTokens: 800 }),
         signal: controllerRef.current.signal,
       });
-
       if (!res.ok) {
         const txt = await res.text();
         setStatusMessage("Server error: " + res.status + ". " + txt.slice(0, 200));
@@ -333,10 +339,8 @@ export default function Page() {
         }
       }
 
-      // Final parse for SEO block
       const { body, seoObj } = extractSeoBlock(accumulated + "\n");
       setArticle(body || "(No article body returned)");
-
       const normalizedSeo = seoObj
         ? {
             title: seoObj.title || "",
@@ -353,17 +357,13 @@ export default function Page() {
             warning: seoObj.warning || null,
           }
         : null;
-
       setSeo(normalizedSeo);
       setSuggestions(generateFriendlySuggestions(normalizedSeo, body));
-
-      // populate editable fields from returned SEO if present
       if (normalizedSeo) {
         setEditableTitle(normalizedSeo.title || "");
         setEditableMeta(normalizedSeo.meta || "");
       }
 
-      // If the model did not include sources, auto-trigger a live search to fetch them.
       if (!normalizedSeo || !Array.isArray(normalizedSeo.sources) || normalizedSeo.sources.length === 0) {
         setStatusMessage("Done — generated article. Fetching live sources...");
         try {
@@ -392,7 +392,6 @@ export default function Page() {
     return { label: "Needs edits", tone: "red" };
   }
 
-  // Apply manual SEO edits into seo state
   function applySeoEdits() {
     const updated = {
       ...(seo || {}),
@@ -410,8 +409,9 @@ export default function Page() {
     <div className="min-h-screen bg-gray-50 p-6">
       <div className="max-w-7xl mx-auto">
         <header className="mb-6">
-          <h1 className="text-2xl font-semibold">SynapseWrite — Instant blog drafts</h1>
-          <p className="text-sm text-gray-600">Paste a topic and get a clean, publish-ready article. Edit SEO directly before exporting.</p>
+          <h1 className="text-2xl font-semibold">SynapseWrite</h1>
+          <p className="text-sm text-gray-600">Your AI writing co-pilot — polished articles in seconds</p>
+          <a className="text-xs text-blue-600" href="https://synapsewrite.ai">synapsewrite.ai</a>
         </header>
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
