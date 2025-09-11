@@ -1,105 +1,47 @@
 // app/api/stream/refresh/route.js
 import { NextResponse } from "next/server";
-import Redis from "ioredis";
 
 /**
- * Refresh route with Redis-backed cache + per-IP rate limiting.
+ * Cached Refresh Sources endpoint
+ * - POST { prompt }
+ * - Uses in-memory Map cache with TTL to reduce SerpAPI calls
+ * - Exposes CACHE_TTL (seconds) via env, default 600 (10 minutes)
  *
- * Env:
- *  - SERPAPI_KEY (optional, recommended)
- *  - REDIS_URL (optional; if absent we fall back to in-memory Map cache)
- *  - CACHE_TTL (seconds, default 600)
- *  - RATE_LIMIT_MAX (requests per window, default 10)
- *  - RATE_LIMIT_WINDOW (seconds, default 60)
- *
- * Notes:
- *  - Install ioredis: npm i ioredis
- *  - For serverless-friendly Redis, Upstash works well (use its redis:// URL).
+ * NOTE: for production cross-instance caching, replace Map with Redis / Upstash.
  */
 
 const SERPAPI_KEY = process.env.SERPAPI_KEY || null;
 const SERPAPI_URL = "https://serpapi.com/search.json";
-const CACHE_TTL = Number(process.env.CACHE_TTL || 600);
-const RATE_LIMIT_MAX = Number(process.env.RATE_LIMIT_MAX || 10);
-const RATE_LIMIT_WINDOW = Number(process.env.RATE_LIMIT_WINDOW || 60);
+const CACHE_TTL = Number(process.env.CACHE_TTL || 600); // seconds
 
-let redis = null;
-const REDIS_URL = process.env.REDIS_URL || null;
-if (REDIS_URL) {
-  redis = new Redis(REDIS_URL);
-  // optional: handle redis errors in logs
-  redis.on("error", (e) => console.error("[redis] error:", e?.message || e));
-}
-
-// In-memory Map fallback (per-instance)
-const inMemoryCache = new Map();
+// Simple in-memory cache: Map<key, {expires: timestamp_ms, value: any}>
+const cache = new Map();
 
 function cacheKeyForPrompt(prompt) {
-  return "refresh:" + prompt.toLowerCase().replace(/\s+/g, " ").trim().slice(0, 500);
+  return prompt
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 500);
 }
 
-async function getCached(key) {
-  if (redis) {
-    try {
-      const raw = await redis.get(key);
-      if (!raw) return null;
-      return JSON.parse(raw);
-    } catch (e) {
-      console.warn("[cache] redis get failed, falling back:", e?.message || e);
-      return null;
-    }
-  } else {
-    const entry = inMemoryCache.get(key);
-    if (!entry) return null;
-    if (Date.now() > entry.expires) {
-      inMemoryCache.delete(key);
-      return null;
-    }
-    return entry.value;
+function getCached(key) {
+  const now = Date.now();
+  const entry = cache.get(key);
+  if (!entry) return null;
+  if (entry.expires < now) {
+    cache.delete(key);
+    console.log("[cache] expired ->", key);
+    return null;
   }
+  console.log("[cache] hit ->", key);
+  return entry.value;
 }
 
-async function setCached(key, value, ttlSeconds = CACHE_TTL) {
-  if (redis) {
-    try {
-      await redis.set(key, JSON.stringify(value), "EX", ttlSeconds);
-      return;
-    } catch (e) {
-      console.warn("[cache] redis set failed:", e?.message || e);
-      // fall through to in-memory fallback
-    }
-  }
-  // in-memory fallback
-  inMemoryCache.set(key, { expires: Date.now() + ttlSeconds * 1000, value });
-}
-
-// Rate limit using Redis INCR with TTL (atomic enough)
-async function checkRateLimit(ip) {
-  const rlKey = `rl:${ip}`;
-  try {
-    if (redis) {
-      const current = await redis.incr(rlKey);
-      if (current === 1) {
-        // set expiry
-        await redis.expire(rlKey, RATE_LIMIT_WINDOW);
-      }
-      return { allowed: current <= RATE_LIMIT_MAX, remaining: Math.max(0, RATE_LIMIT_MAX - current), current };
-    } else {
-      // in-memory rate-limit fallback
-      const entry = inMemoryCache.get(rlKey) || { count: 0, expiresAt: Date.now() + RATE_LIMIT_WINDOW * 1000 };
-      if (Date.now() > entry.expiresAt) {
-        entry.count = 1;
-        entry.expiresAt = Date.now() + RATE_LIMIT_WINDOW * 1000;
-      } else {
-        entry.count += 1;
-      }
-      inMemoryCache.set(rlKey, entry);
-      return { allowed: entry.count <= RATE_LIMIT_MAX, remaining: Math.max(0, RATE_LIMIT_MAX - entry.count), current: entry.count };
-    }
-  } catch (e) {
-    console.warn("[rate] check failed, allowing request:", e?.message || e);
-    return { allowed: true, remaining: RATE_LIMIT_MAX, current: 0 };
-  }
+function setCached(key, value, ttlSeconds = CACHE_TTL) {
+  const expires = Date.now() + ttlSeconds * 1000;
+  cache.set(key, { expires, value });
+  console.log("[cache] set ->", key, "ttl(s):", ttlSeconds);
 }
 
 async function fetchSerpApi(query, options = {}) {
@@ -160,33 +102,17 @@ function summarizeTopResults(results) {
   return parts.join(" — ");
 }
 
-// Helper to get client IP from Next.js Request
-function getIpFromReq(req) {
-  // Next.js Request headers available via req.headers
-  const forwarded = req.headers.get("x-forwarded-for");
-  if (forwarded) return forwarded.split(",")[0].trim();
-  const ip = req.headers.get("x-real-ip") || req.headers.get("x-client-ip") || "unknown";
-  return ip;
-}
-
 export async function POST(req) {
   try {
     const payload = await req.json().catch(() => ({}));
     const prompt = (payload.prompt || "").trim();
-    if (!prompt) return NextResponse.json({ error: "Missing prompt" }, { status: 400 });
-
-    const ip = getIpFromReq(req);
-    const rl = await checkRateLimit(ip);
-    if (!rl.allowed) {
-      return NextResponse.json({ error: "Rate limit exceeded", retryAfter: RATE_LIMIT_WINDOW, remaining: 0 }, { status: 429 });
+    if (!prompt) {
+      return NextResponse.json({ error: "Missing prompt" }, { status: 400 });
     }
 
     const key = cacheKeyForPrompt(prompt);
-    const cached = await getCached(key);
-    if (cached) {
-      console.log("[refresh] cache hit for", key, "ip:", ip);
-      return NextResponse.json(cached);
-    }
+    const cached = getCached(key);
+    if (cached) return NextResponse.json(cached);
 
     if (!SERPAPI_KEY) {
       const resp = {
@@ -195,11 +121,10 @@ export async function POST(req) {
         evidenceSummary: "SERPAPI_KEY not configured on the server. Live searches are disabled.",
         warning: "SERPAPI_KEY_MISSING",
       };
-      await setCached(key, resp, 30); // short cache
+      setCached(key, resp, 30);
       return NextResponse.json(resp);
     }
 
-    // Build query biasing to India/2025 if absent
     let query = prompt;
     if (!/india/i.test(prompt)) query += " India";
     if (!/20\d{2}/i.test(prompt)) query += " 2025";
@@ -215,7 +140,7 @@ export async function POST(req) {
         evidenceSummary: `Search failed: ${err?.message || "unknown error"}`,
         error: err?.message || String(err),
       };
-      await setCached(key, resp, 30);
+      setCached(key, resp, 30);
       return NextResponse.json(resp, { status: 502 });
     }
 
@@ -230,8 +155,8 @@ export async function POST(req) {
     const evidenceSummary = summarizeTopResults(sources);
 
     const result = { sources, confidence, evidenceSummary };
-    await setCached(key, result, CACHE_TTL);
 
+    setCached(key, result, CACHE_TTL);
     return NextResponse.json(result);
   } catch (err) {
     console.error("[refresh] fatal error:", err?.message || err);
