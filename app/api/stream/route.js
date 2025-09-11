@@ -1,36 +1,20 @@
 // app/api/stream/route.js
 /**
- * Robust streaming route for article generation (OpenAI) with:
- * - SSE stream parsing (extracts choices[].delta.content)
- * - Non-stream fallback (stream: false) if stream yields no assistant content
- * - Per-IP rate limiting (Redis if REDIS_URL set, otherwise in-memory)
- * - Server-side structured logging via sendLog()
+ * Streaming route (OpenAI) — no Redis, in-memory rate limiting fallback.
  *
  * Requirements:
  *  - process.env.OPENAI_API_KEY
- *  - Optional: process.env.REDIS_URL for cross-instance rate-limits
  *  - Optional envs:
  *      STREAM_RATE_LIMIT_MAX (default 6)
  *      STREAM_RATE_LIMIT_WINDOW (seconds, default 60)
+ *
+ * Note: import path for logger is relative to this file location.
  */
 
-import Redis from "ioredis";
-import { sendLog } from "@/lib/logger";
+import { sendLog } from "../../../lib/logger";
 
 const OPENAI_URL = "https://api.openai.com/v1/chat/completions";
 const MODEL = process.env.OPENAI_MODEL || "gpt-4o-mini-2024-07-18";
-
-const REDIS_URL = process.env.REDIS_URL || null;
-let redisClient = null;
-if (REDIS_URL) {
-  try {
-    redisClient = new Redis(REDIS_URL);
-    redisClient.on("error", (e) => console.error("[redis] error:", e?.message || e));
-  } catch (e) {
-    console.warn("[redis] init failed:", e?.message || e);
-    redisClient = null;
-  }
-}
 
 const STREAM_RATE_LIMIT_MAX = Number(process.env.STREAM_RATE_LIMIT_MAX || 6);
 const STREAM_RATE_LIMIT_WINDOW = Number(process.env.STREAM_RATE_LIMIT_WINDOW || 60); // seconds
@@ -47,17 +31,6 @@ function getIpFromReq(req) {
 async function checkStreamRateLimit(req) {
   const ip = getIpFromReq(req) || "unknown";
   const rlKey = `rl_stream:${ip}`;
-
-  if (redisClient) {
-    try {
-      const cur = await redisClient.incr(rlKey);
-      if (cur === 1) await redisClient.expire(rlKey, STREAM_RATE_LIMIT_WINDOW);
-      const allowed = cur <= STREAM_RATE_LIMIT_MAX;
-      return { allowed, remaining: Math.max(0, STREAM_RATE_LIMIT_MAX - cur), current: cur, ip };
-    } catch (e) {
-      console.warn("[rate] redis check failed, falling back to memory:", e?.message || e);
-    }
-  }
 
   const now = Date.now();
   const entry = rlMemory.get(rlKey) || { count: 0, expiresAt: now + STREAM_RATE_LIMIT_WINDOW * 1000 };
@@ -127,7 +100,7 @@ function extractSeoBlockFromText(text) {
 
 export async function POST(req) {
   try {
-    // Rate-limit check
+    // Rate-limit check (in-memory)
     const rl = await checkStreamRateLimit(req);
     if (!rl.allowed) {
       await sendLog({ event: "generate.rate_limited", ip: rl.ip, current: rl.current });
@@ -188,7 +161,7 @@ export async function POST(req) {
     if (!openaiRes.ok) {
       const txt = await openaiRes.text();
       console.error(nowTag(), "OpenAI stream responded non-200:", openaiRes.status);
-      await sendLog({ event: "generate.openai_non_200", status: openaiRes.status, detail: txt?.slice(0, 500) || "" , ip: rl.ip});
+      await sendLog({ event: "generate.openai_non_200", status: openaiRes.status, detail: txt?.slice(0, 500) || "", ip: rl.ip });
       try {
         const fallback = await nonStreamCompletion(prompt, maxTokens);
         const { body, seoObj } = extractSeoBlockFromText(fallback);
