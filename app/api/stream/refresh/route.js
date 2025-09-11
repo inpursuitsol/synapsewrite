@@ -1,165 +1,345 @@
-// app/api/stream/refresh/route.js
-import { NextResponse } from "next/server";
-
+// app/api/stream/route.js
 /**
- * Cached Refresh Sources endpoint
- * - POST { prompt }
- * - Uses in-memory Map cache with TTL to reduce SerpAPI calls
- * - Exposes CACHE_TTL (seconds) via env, default 600 (10 minutes)
+ * Robust streaming route for article generation (OpenAI) with:
+ * - SSE stream parsing (extracts choices[].delta.content)
+ * - Non-stream fallback (stream: false) if stream yields no assistant content
+ * - Per-IP rate limiting (Redis if REDIS_URL set, otherwise in-memory)
+ * - Server-side logging of key events (prompt, article length, seo info)
  *
- * NOTE: for production cross-instance caching, replace Map with Redis / Upstash.
+ * Requirements:
+ *  - process.env.OPENAI_API_KEY
+ *  - Optional: process.env.REDIS_URL for cross-instance rate-limits
+ *  - Optional envs:
+ *      STREAM_RATE_LIMIT_MAX (default 6)
+ *      STREAM_RATE_LIMIT_WINDOW (seconds, default 60)
+ *
+ * NOTE:
+ * - This file returns plain text (the assistant content). The frontend's `extractSeoBlock`
+ *   should parse a trailing SEO JSON block if your model appends one.
  */
 
-const SERPAPI_KEY = process.env.SERPAPI_KEY || null;
-const SERPAPI_URL = "https://serpapi.com/search.json";
-const CACHE_TTL = Number(process.env.CACHE_TTL || 600); // seconds
+import Redis from "ioredis";
 
-// Simple in-memory cache: Map<key, {expires: timestamp_ms, value: any}>
-const cache = new Map();
+const OPENAI_URL = "https://api.openai.com/v1/chat/completions";
+const MODEL = process.env.OPENAI_MODEL || "gpt-4o-mini-2024-07-18";
 
-function cacheKeyForPrompt(prompt) {
-  return prompt
-    .toLowerCase()
-    .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, 500);
+const REDIS_URL = process.env.REDIS_URL || null;
+let redisClient = null;
+if (REDIS_URL) {
+  try {
+    redisClient = new Redis(REDIS_URL);
+    redisClient.on("error", (e) => console.error("[redis] error:", e?.message || e));
+  } catch (e) {
+    console.warn("[redis] init failed:", e?.message || e);
+    redisClient = null;
+  }
 }
 
-function getCached(key) {
+const STREAM_RATE_LIMIT_MAX = Number(process.env.STREAM_RATE_LIMIT_MAX || 6);
+const STREAM_RATE_LIMIT_WINDOW = Number(process.env.STREAM_RATE_LIMIT_WINDOW || 60); // seconds
+
+// in-memory fallback for rate-limiting (per-instance)
+const rlMemory = new Map();
+
+function getIpFromReq(req) {
+  // Next.js Request headers available via req.headers.get()
+  const forwarded = req.headers.get("x-forwarded-for");
+  if (forwarded) return forwarded.split(",")[0].trim();
+  return req.headers.get("x-real-ip") || req.headers.get("x-client-ip") || "unknown";
+}
+
+async function checkStreamRateLimit(req) {
+  const ip = getIpFromReq(req) || "unknown";
+  const rlKey = `rl_stream:${ip}`;
+
+  // Redis-backed
+  if (redisClient) {
+    try {
+      const cur = await redisClient.incr(rlKey);
+      if (cur === 1) {
+        await redisClient.expire(rlKey, STREAM_RATE_LIMIT_WINDOW);
+      }
+      const allowed = cur <= STREAM_RATE_LIMIT_MAX;
+      return { allowed, remaining: Math.max(0, STREAM_RATE_LIMIT_MAX - cur), current: cur, ip };
+    } catch (e) {
+      console.warn("[rate] redis check failed, falling back to memory:", e?.message || e);
+      // fall through to in-memory
+    }
+  }
+
+  // in-memory fallback
   const now = Date.now();
-  const entry = cache.get(key);
-  if (!entry) return null;
-  if (entry.expires < now) {
-    cache.delete(key);
-    console.log("[cache] expired ->", key);
-    return null;
+  const entry = rlMemory.get(rlKey) || { count: 0, expiresAt: now + STREAM_RATE_LIMIT_WINDOW * 1000 };
+  if (now > entry.expiresAt) {
+    entry.count = 1;
+    entry.expiresAt = now + STREAM_RATE_LIMIT_WINDOW * 1000;
+  } else {
+    entry.count += 1;
   }
-  console.log("[cache] hit ->", key);
-  return entry.value;
+  rlMemory.set(rlKey, entry);
+  const allowed = entry.count <= STREAM_RATE_LIMIT_MAX;
+  return { allowed, remaining: Math.max(0, STREAM_RATE_LIMIT_MAX - entry.count), current: entry.count, ip };
 }
 
-function setCached(key, value, ttlSeconds = CACHE_TTL) {
-  const expires = Date.now() + ttlSeconds * 1000;
-  cache.set(key, { expires, value });
-  console.log("[cache] set ->", key, "ttl(s):", ttlSeconds);
+function nowTag() {
+  return new Date().toISOString();
 }
 
-async function fetchSerpApi(query, options = {}) {
-  const params = new URLSearchParams({
-    engine: "google",
-    q: query,
-    hl: options.hl || "en",
-    gl: options.gl || "in",
-    num: String(options.num || 6),
-    api_key: SERPAPI_KEY,
+async function nonStreamCompletion(prompt, maxTokens = 800) {
+  const body = {
+    model: MODEL,
+    messages: [
+      {
+        role: "system",
+        content:
+          "You are a helpful assistant that outputs a clean article in plain text followed by a final SEO JSON block. Do NOT include code fences or labels. The final block must be valid JSON with fields: title, meta, confidence (0..1), sources (array).",
+      },
+      { role: "user", content: prompt },
+    ],
+    max_tokens: maxTokens,
+    temperature: 0.2,
+    stream: false,
+  };
+
+  const r = await fetch(OPENAI_URL, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+    },
+    body: JSON.stringify(body),
   });
-  const url = `${SERPAPI_URL}?${params.toString()}`;
-  const resp = await fetch(url);
-  if (!resp.ok) {
-    const txt = await resp.text();
-    throw new Error(`SerpAPI error ${resp.status}: ${txt}`);
-  }
-  return resp.json();
-}
 
-function parsePublishedDateFromSnippet(snippet) {
-  if (!snippet) return null;
-  const m = snippet.match(/(20\d{2})/);
-  return m ? Number(m[1]) : null;
-}
-
-function computeConfidenceFromResults(results) {
-  if (!results || results.length === 0) return null;
-  let score = 0.25;
-  const n = Math.min(results.length, 6);
-  score += 0.12 * n;
-
-  const marketplaceDomains = ["flipkart.com", "amazon.in", "gsmarena.com", "91mobiles.com"];
-  const domainBoost = results.reduce((acc, r) => {
-    const url = (r.url || "").toLowerCase();
-    return acc + (marketplaceDomains.some(d => url.includes(d)) ? 0.08 : 0);
-  }, 0);
-  score += Math.min(0.25, domainBoost);
-
-  const years = results.map(r => parsePublishedDateFromSnippet(r.snippet)).filter(Boolean);
-  if (years.length > 0) {
-    const recentCount = years.filter(y => y >= 2024).length;
-    score += Math.min(0.25, 0.08 * recentCount);
+  if (!r.ok) {
+    const txt = await r.text();
+    throw new Error(`OpenAI non-stream error ${r.status}: ${txt}`);
   }
 
-  score = Math.max(0, Math.min(0.95, score));
-  return Number(score.toFixed(2));
+  const json = await r.json();
+  // try to support both shapes
+  const text = json?.choices?.[0]?.message?.content || json?.choices?.[0]?.text || "";
+  return text;
 }
 
-function summarizeTopResults(results) {
-  if (!results || results.length === 0) return "No relevant results found.";
-  const top = results.slice(0, 3);
-  const parts = top.map((r) => {
-    const t = r.label || r.title || (r.url ? new URL(r.url).hostname : "");
-    const s = (r.snippet || "").replace(/\s+/g, " ").trim();
-    return s ? `${t}: ${s}` : t;
-  }).filter(Boolean);
-  return parts.join(" — ");
+// parse trailing SEO JSON block (loosely)
+function extractSeoBlockFromText(text) {
+  if (!text) return { body: text || "", seoObj: null };
+  const jsonMatch = text.match(/\{[\s\S]*\}\s*$/);
+  if (!jsonMatch) return { body: text.trim(), seoObj: null };
+  const jsonText = jsonMatch[0];
+  try {
+    const seoObj = JSON.parse(jsonText);
+    const body = text.replace(jsonText, "").trim();
+    return { body, seoObj };
+  } catch (e) {
+    // invalid JSON, return as body
+    return { body: text.trim(), seoObj: null };
+  }
 }
 
 export async function POST(req) {
   try {
+    // Rate-limit check
+    const rl = await checkStreamRateLimit(req);
+    if (!rl.allowed) {
+      console.warn(nowTag(), "Rate limit exceeded for", rl.ip, "current:", rl.current);
+      return new Response(JSON.stringify({ error: "Rate limit exceeded", retryAfter: STREAM_RATE_LIMIT_WINDOW }), {
+        status: 429,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+
+    if (!process.env.OPENAI_API_KEY) {
+      console.error(nowTag(), "OPENAI_API_KEY not configured");
+      return new Response(JSON.stringify({ error: "OPENAI_API_KEY not configured on server" }), {
+        status: 500,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+
     const payload = await req.json().catch(() => ({}));
     const prompt = (payload.prompt || "").trim();
+    const maxTokens = payload.maxTokens || 800;
+
     if (!prompt) {
-      return NextResponse.json({ error: "Missing prompt" }, { status: 400 });
+      return new Response(JSON.stringify({ error: "Missing prompt" }), { status: 400, headers: { "Content-Type": "application/json" } });
     }
 
-    const key = cacheKeyForPrompt(prompt);
-    const cached = getCached(key);
-    if (cached) return NextResponse.json(cached);
+    console.log(nowTag(), "Generate requested — ip:", rl.ip, "prompt_snippet:", prompt.slice(0, 200));
 
-    if (!SERPAPI_KEY) {
-      const resp = {
-        sources: [],
-        confidence: null,
-        evidenceSummary: "SERPAPI_KEY not configured on the server. Live searches are disabled.",
-        warning: "SERPAPI_KEY_MISSING",
-      };
-      setCached(key, resp, 30);
-      return NextResponse.json(resp);
+    // Build streaming request
+    const openaiReq = {
+      model: MODEL,
+      messages: [
+        {
+          role: "system",
+          content:
+            "You are a helpful assistant that outputs a clean article in plain text followed by a final SEO JSON block. Do NOT include code fences or labels. The final block must be a valid JSON object with fields: title, meta, confidence, sources (array).",
+        },
+        { role: "user", content: prompt },
+      ],
+      max_tokens: maxTokens,
+      temperature: 0.2,
+      stream: true,
+    };
+
+    const openaiRes = await fetch(OPENAI_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+      },
+      body: JSON.stringify(openaiReq),
+    });
+
+    if (!openaiRes.ok) {
+      const txt = await openaiRes.text();
+      console.error(nowTag(), "OpenAI stream responded non-200:", openaiRes.status, txt.slice(0, 800));
+      // Try non-stream fallback
+      try {
+        const fallback = await nonStreamCompletion(prompt, maxTokens);
+        // log fallback result length
+        const snippet = (fallback || "").slice(0, 200).replace(/\n/g, " ");
+        console.log(nowTag(), "Fallback non-stream produced length:", (fallback || "").length, "snippet:", snippet);
+        return new Response(fallback || "[No assistant text returned]", {
+          status: 200,
+          headers: { "Content-Type": "text/plain; charset=utf-8" },
+        });
+      } catch (e) {
+        return new Response(JSON.stringify({ error: "OpenAI error", detail: txt || e.message }), {
+          status: 502,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
     }
 
-    let query = prompt;
-    if (!/india/i.test(prompt)) query += " India";
-    if (!/20\d{2}/i.test(prompt)) query += " 2025";
+    if (!openaiRes.body) {
+      console.warn(nowTag(), "No streaming body from OpenAI — using non-stream fallback");
+      const fallback = await nonStreamCompletion(prompt, maxTokens);
+      return new Response(fallback || "[No assistant text returned]", { status: 200, headers: { "Content-Type": "text/plain; charset=utf-8" } });
+    }
 
-    let json;
+    // Parse the SSE stream, buffer content (so we can fallback if empty)
+    const reader = openaiRes.body.getReader();
+    const decoder = new TextDecoder("utf-8");
+    let buffer = "";
+    let accumulated = "";
+    let sawAnyContent = false;
+
     try {
-      json = await fetchSerpApi(query, { hl: "en", gl: "in", num: 6 });
-    } catch (err) {
-      console.error("[refresh] SerpAPI fetch error:", err?.message || err);
-      const resp = {
-        sources: [],
-        confidence: null,
-        evidenceSummary: `Search failed: ${err?.message || "unknown error"}`,
-        error: err?.message || String(err),
-      };
-      setCached(key, resp, 30);
-      return NextResponse.json(resp, { status: 502 });
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+
+        // Split SSE lines
+        const lines = buffer.split(/\r?\n/);
+        buffer = lines.pop(); // keep last partial
+
+        for (let rawLine of lines) {
+          const line = rawLine.trim();
+          if (!line) continue;
+          if (!line.startsWith("data:")) continue;
+          const payload = line.replace(/^data:\s*/, "");
+          if (payload === "[DONE]") {
+            // stream finished marker
+            break;
+          }
+
+          let parsed;
+          try {
+            parsed = JSON.parse(payload);
+          } catch (e) {
+            // Non-JSON payload — skip
+            continue;
+          }
+
+          try {
+            const choices = parsed.choices || [];
+            for (let ch of choices) {
+              const delta = ch.delta || {};
+              const piece = delta.content || ch.message?.content || ch.text || "";
+              if (piece && typeof piece === "string") {
+                sawAnyContent = true;
+                accumulated += piece;
+              }
+            }
+          } catch (e) {
+            // ignore chunk-level errors
+          }
+        }
+      }
+
+      // flush leftover buffer if it contains data:
+      if (buffer && buffer.includes("data:")) {
+        const leftover = buffer.replace(/^data:\s*/, "").trim();
+        if (leftover && leftover !== "[DONE]") {
+          try {
+            const parsed = JSON.parse(leftover);
+            const choices = parsed.choices || [];
+            for (let ch of choices) {
+              const piece = ch.delta?.content || ch.message?.content || ch.text || "";
+              if (piece) {
+                sawAnyContent = true;
+                accumulated += piece;
+              }
+            }
+          } catch (e) {
+            // ignore
+          }
+        }
+      }
+    } catch (readErr) {
+      console.error(nowTag(), "Error reading OpenAI stream:", readErr?.message || readErr);
+      // attempt non-stream fallback
+      try {
+        const fallback = await nonStreamCompletion(prompt, maxTokens);
+        return new Response(fallback || "[No assistant text returned]", { status: 200, headers: { "Content-Type": "text/plain; charset=utf-8" } });
+      } catch (e) {
+        return new Response(JSON.stringify({ error: "Stream read error and fallback failed", detail: String(e) }), {
+          status: 502,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+    } finally {
+      try {
+        reader.releaseLock();
+      } catch (e) {}
     }
 
-    const organic = Array.isArray(json.organic_results) ? json.organic_results : [];
-    const sources = organic.slice(0, 6).map((r) => ({
-      url: r.link || r.url || r.displayed_link || "",
-      label: r.title || r.displayed_link || r.link || "",
-      snippet: r.snippet || r.snippet_highlighted || "",
-    })).filter(s => s.url);
+    // If we got content, return it. Otherwise fallback to non-stream.
+    if (sawAnyContent && accumulated.trim()) {
+      // Log summary: length and SEO block if present
+      const snippet = accumulated.slice(0, 200).replace(/\n/g, " ");
+      const { body, seoObj } = extractSeoBlockFromText(accumulated);
+      const articleLen = (body || "").split(/\s+/).filter(Boolean).length;
+      const sourcesCount = Array.isArray(seoObj?.sources) ? seoObj.sources.length : 0;
+      const confidence = seoObj?.confidence ?? null;
+      console.log(nowTag(), "Stream produced content — words:", articleLen, "sources:", sourcesCount, "confidence:", confidence, "snippet:", snippet);
 
-    const confidence = computeConfidenceFromResults(sources);
-    const evidenceSummary = summarizeTopResults(sources);
+      // Return the raw accumulated text (contains body + trailing SEO JSON if model appended it)
+      return new Response(accumulated, { status: 200, headers: { "Content-Type": "text/plain; charset=utf-8" } });
+    }
 
-    const result = { sources, confidence, evidenceSummary };
-
-    setCached(key, result, CACHE_TTL);
-    return NextResponse.json(result);
+    // No assistant deltas detected -> perform non-stream fallback
+    console.warn(nowTag(), "Stream returned no assistant deltas. Performing non-stream fallback.");
+    try {
+      const fallback = await nonStreamCompletion(prompt, maxTokens);
+      const { body, seoObj } = extractSeoBlockFromText(fallback);
+      const articleLen = (body || "").split(/\s+/).filter(Boolean).length;
+      const sourcesCount = Array.isArray(seoObj?.sources) ? seoObj.sources.length : 0;
+      const confidence = seoObj?.confidence ?? null;
+      console.log(nowTag(), "Fallback produced content — words:", articleLen, "sources:", sourcesCount, "confidence:", confidence);
+      return new Response(fallback || "[No assistant text returned]", { status: 200, headers: { "Content-Type": "text/plain; charset=utf-8" } });
+    } catch (e) {
+      console.error(nowTag(), "Fallback non-stream failed:", e?.message || e);
+      return new Response("[No assistant text returned]", { status: 200, headers: { "Content-Type": "text/plain; charset=utf-8" } });
+    }
   } catch (err) {
-    console.error("[refresh] fatal error:", err?.message || err);
-    return NextResponse.json({ error: "Internal server error", detail: err?.message || String(err) }, { status: 500 });
+    console.error(nowTag(), "Route fatal error:", err?.message || err);
+    return new Response(JSON.stringify({ error: "Internal server error", detail: String(err) }), {
+      status: 500,
+      headers: { "Content-Type": "application/json" },
+    });
   }
 }
