@@ -1,4 +1,3 @@
-// app/api/checkout/subscription/route.js
 /**
  * Create a Razorpay subscription (server-side).
  * Expects:
@@ -31,11 +30,9 @@ export async function POST(req) {
 
     const payload = {
       plan_id,
-      total_count: body.total_count || 12, // number of billing cycles (optional)
+      total_count: body.total_count || 12,
       quantity: 1,
       customer_notify: 1,
-      // optionally include customer details if you have them:
-      // customer: body.customer
     };
 
     const res = await fetch("https://api.razorpay.com/v1/subscriptions", {
@@ -52,7 +49,6 @@ export async function POST(req) {
       return new Response(JSON.stringify({ error: data }), { status: 400, headers: { "Content-Type": "application/json" } });
     }
 
-    // return subscription object to caller
     return new Response(JSON.stringify({ subscription: data }), { status: 200, headers: { "Content-Type": "application/json" } });
   } catch (err) {
     console.error("razorpay subscription error:", err);
