@@ -8,12 +8,13 @@
     "start": "next start"
   },
   "dependencies": {
+    "@tailwindcss/typography": "^0.5.10",
+    "@vercel/kv": "latest",
     "next": "14.0.0",
+    "openai": "^4.0.0",
     "react": "18.2.0",
     "react-dom": "18.2.0",
-    "openai": "^4.0.0",
-    "@tailwindcss/typography": "^0.5.10",
-    "@vercel/kv": "latest"
+    "stripe": "^18.5.0"
   },
   "devDependencies": {
     "autoprefixer": "^10.4.15",
