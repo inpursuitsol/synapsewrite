@@ -9,21 +9,31 @@ export default function SignupPage() {
   const [company, setCompany] = useState("");
   const [loading, setLoading] = useState(false);
   const [done, setDone] = useState(false);
+  const [error, setError] = useState("");
 
-  const onSubmit = (e) => {
+  async function onSubmit(e) {
     e.preventDefault();
-    if (!email) return alert("Please enter email");
+    setError("");
+    if (!email) {
+      setError("Please enter email");
+      return;
+    }
     setLoading(true);
-
-    // Simulate submit and persist to localStorage
-    setTimeout(() => {
-      const leads = JSON.parse(localStorage.getItem("sw_leads") || "[]");
-      leads.unshift({ name, email, company, ts: new Date().toISOString() });
-      localStorage.setItem("sw_leads", JSON.stringify(leads));
-      setLoading(false);
+    try {
+      const res = await fetch("/api/signup", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name, email, company }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Signup failed");
       setDone(true);
-    }, 900);
-  };
+    } catch (err) {
+      setError(err.message || "Signup failed");
+    } finally {
+      setLoading(false);
+    }
+  }
 
   return (
     <div style={{ maxWidth: 720, margin: "0 auto", paddingTop: 18 }}>
@@ -37,8 +47,10 @@ export default function SignupPage() {
             <input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="Email" type="email" required style={{ padding: 12, borderRadius: 8, border: "1px solid rgba(15,23,36,0.06)" }} />
             <input value={company} onChange={(e) => setCompany(e.target.value)} placeholder="Company (optional)" style={{ padding: 12, borderRadius: 8, border: "1px solid rgba(15,23,36,0.06)" }} />
 
+            {error && <div style={{ color: "crimson" }}>{error}</div>}
+
             <div style={{ display: "flex", gap: 10, marginTop: 6 }}>
-              <button style={{ padding: "10px 14px", borderRadius: 8, background: "linear-gradient(90deg,#0b69ff,#00c2ff)", color: "white", border: "none", fontWeight: 700 }} disabled={loading}>
+              <button disabled={loading} style={{ padding: "10px 14px", borderRadius: 8, background: "linear-gradient(90deg,#0b69ff,#00c2ff)", color: "white", border: "none", fontWeight: 700 }}>
                 {loading ? "Creating…" : "Create account"}
               </button>
               <a href="/generate" style={{ padding: "10px 14px", borderRadius: 8, border: "1px solid rgba(15,23,36,0.06)", textDecoration: "none", color: "#0f1724", display: "inline-flex", alignItems: "center" }}>Try demo</a>
@@ -47,8 +59,8 @@ export default function SignupPage() {
         </form>
       ) : (
         <div style={{ marginTop: 18, background: "white", padding: 18, borderRadius: 12, border: "1px solid rgba(15,23,36,0.04)" }}>
-          <h3 style={{ margin: 0 }}>Thanks — account created (simulated)</h3>
-          <p style={{ color: "#374151" }}>We stored your info locally. You can now go to the editor to start writing.</p>
+          <h3 style={{ margin: 0 }}>Thanks — we received your request</h3>
+          <p style={{ color: "#374151" }}>This demo signup is stored (server-side demo). For production we'll connect to a database or identity provider.</p>
           <a href="/generate" style={{ padding: "10px 14px", borderRadius: 8, background: "linear-gradient(90deg,#0b69ff,#00c2ff)", color: "white", textDecoration: "none", fontWeight: 700 }}>Go to editor</a>
         </div>
       )}
