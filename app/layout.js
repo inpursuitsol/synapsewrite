@@ -24,6 +24,8 @@ export default function RootLayout({ children }) {
               <a className="nav-link" href="/features/streaming">Features</a>
               <a className="nav-link" href="/pricing">Pricing</a>
               <a className="nav-link" href="/docs">Docs</a>
+
+              {/* Single global primary CTA (only here) */}
               <a className="nav-cta" href="/signup">Create account</a>
             </nav>
           </header>
@@ -37,12 +39,11 @@ export default function RootLayout({ children }) {
         </div>
 
         <style>{`
-          /* Global shell: simplified, roomy, premium */
-          @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&family=Poppins:wght@600;700&display=swap');
+          /* Global shell: minimal, premium typography */
+          @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600&family=Poppins:wght@600;700&display=swap');
 
           :root{
             --bg:#f6f7f9;
-            --card:#fff;
             --muted:#6b7280;
             --accent:#0b69ff;
             --accent-2:#00c2ff;
@@ -51,16 +52,16 @@ export default function RootLayout({ children }) {
 
           html,body{height:100%;margin:0;background:var(--bg);color:var(--text);font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Arial}
           .root-shell{min-height:100vh;display:flex;flex-direction:column}
-          .topbar{display:flex;align-items:center;justify-content:space-between;padding:20px 36px;border-bottom:1px solid rgba(15,23,36,0.04);background:rgba(255,255,255,0.9);backdrop-filter: blur(6px)}
-          .left{display:flex;align-items:center;gap:16px}
-          .logo{display:grid;place-items:center;width:58px;height:58px;border-radius:12px;background:linear-gradient(135deg,var(--accent),var(--accent-2));color:white;font-weight:800;text-decoration:none;font-family:Poppins,Inter}
+          .topbar{display:flex;align-items:center;justify-content:space-between;padding:18px 36px;border-bottom:1px solid rgba(15,23,36,0.04);background:rgba(255,255,255,0.9);backdrop-filter: blur(4px)}
+          .left{display:flex;align-items:center;gap:14px}
+          .logo{display:grid;place-items:center;width:56px;height:56px;border-radius:12px;background:linear-gradient(135deg,var(--accent),var(--accent-2));color:white;font-weight:800;text-decoration:none;font-family:Poppins,Inter}
           .brand-title{font-weight:700;font-size:20px;font-family:Poppins,Inter}
           .brand-sub{font-size:13px;color:var(--muted);margin-top:2px}
 
           .nav{display:flex;gap:14px;align-items:center}
           .nav-link{text-decoration:none;color:var(--muted);padding:8px 12px;border-radius:9px;font-weight:600}
           .nav-link:hover{background:rgba(11,105,255,0.06);color:var(--text)}
-          .nav-cta{text-decoration:none;background:linear-gradient(90deg,var(--accent),var(--accent-2));color:white;padding:9px 14px;border-radius:12px;font-weight:800;box-shadow:0 12px 30px rgba(11,105,255,0.08)}
+          .nav-cta{text-decoration:none;background:linear-gradient(90deg,var(--accent),var(--accent-2));color:white;padding:9px 14px;border-radius:12px;font-weight:800;box-shadow:0 10px 30px rgba(11,105,255,0.08)}
 
           .main{flex:1;max-width:1260px;margin:34px auto;padding:0 28px 64px}
           .footer{padding:18px 36px;border-top:1px solid rgba(15,23,36,0.04);display:flex;justify-content:space-between;color:var(--muted)}
