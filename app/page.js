@@ -1,201 +1,118 @@
-<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>SynapseWrite — AI article generator</title>
-  <meta name="description" content="SynapseWrite: AI-powered article generator with WordPress & Markdown export, SEO scoring, and fast streaming authoring." />
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700;800&display=swap" rel="stylesheet">
-  <style>
-    :root{
-      --bg:#0f1724; /* deep navy */
-      --card:#0f1728;
-      --muted:#93a0b8;
-      --accent:#7c5cff; /* purple */
-      --accent-2:#00d4ff; /* cyan */
-      --glass: rgba(255,255,255,0.04);
-      --white: #edf2f9;
-      --radius:14px;
-      font-family: Inter, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial;
-    }
-    *{box-sizing:border-box}
-    html,body{height:100%}
-    body{
-      margin:0;background:linear-gradient(180deg,#071021 0%, #081226 40%, #04101a 100%);color:var(--white);-webkit-font-smoothing:antialiased;line-height:1.45}
-    .container{max-width:1120px;margin:0 auto;padding:36px}
+"use client"
+import React from "react";
 
-    /* Header */
-    header{display:flex;align-items:center;justify-content:space-between;padding:8px 0}
-    .brand{display:flex;align-items:center;gap:12px;font-weight:700}
-    .logo{width:44px;height:44px;border-radius:10px;display:grid;place-items:center;background:linear-gradient(135deg,var(--accent),var(--accent-2));box-shadow:0 6px 18px rgba(124,92,255,0.12);font-weight:800}
-    nav{display:flex;gap:18px;align-items:center}
-    nav a{color:var(--muted);text-decoration:none;font-weight:600}
-    .cta{background:linear-gradient(90deg,var(--accent),var(--accent-2));padding:10px 16px;border-radius:10px;color:#021; font-weight:700;text-decoration:none}
-
-    /* Hero */
-    .hero{display:grid;grid-template-columns:1fr 420px;gap:36px;align-items:center;padding:56px 0}
-    .eyebrow{display:inline-block;padding:6px 10px;border-radius:999px;background:linear-gradient(90deg,rgba(124,92,255,0.12),rgba(0,212,255,0.06));color:var(--accent);font-weight:700}
-    h1{font-size:40px;margin:18px 0;color:var(--white);line-height:1.03}
-    p.lead{color:var(--muted);max-width:60ch}
-    .actions{margin-top:20px;display:flex;gap:12px}
-    .btn{background:transparent;border:1px solid rgba(255,255,255,0.06);padding:12px 18px;border-radius:12px;color:var(--white);font-weight:700}
-    .btn-primary{background:linear-gradient(90deg,var(--accent),var(--accent-2));color:#021;border:none}
-
-    /* Card */
-    .card{background:linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01));padding:18px;border-radius:16px;border:1px solid rgba(255,255,255,0.03);box-shadow:0 10px 30px rgba(2,6,23,0.6)}
-    .price{font-size:20px;font-weight:800}
-    .features{display:grid;gap:10px;margin-top:12px}
-
-    /* Features grid */
-    .features-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:18px;margin:44px 0}
-    .feature{background:var(--glass);padding:18px;border-radius:12px;border:1px solid rgba(255,255,255,0.02)}
-    .feature h4{margin:0 0 8px 0}
-    .feature p{margin:0;color:var(--muted);font-size:14px}
-
-    /* Footer */
-    footer{padding:36px 0;border-top:1px solid rgba(255,255,255,0.02);color:var(--muted);display:flex;justify-content:space-between;align-items:center}
-
-    /* Responsive */
-    @media (max-width:980px){
-      .hero{grid-template-columns:1fr;}
-      .features-grid{grid-template-columns:repeat(2,1fr)}
-      nav{display:none}
-    }
-    @media (max-width:600px){
-      h1{font-size:28px}
-      .features-grid{grid-template-columns:1fr}
-      .container{padding:20px}
-    }
-
-    /* small helpers */
-    .muted{color:var(--muted)}
-    .small{font-size:13px}
-  </style>
-</head>
-<body>
-  <div class="container">
-    <header>
-      <div class="brand">
-        <div class="logo">SW</div>
-        <div>
-          <div style="font-size:15px">SynapseWrite</div>
-          <div style="font-size:12px;color:var(--muted);margin-top:2px">AI article generator</div>
-        </div>
-      </div>
-      <nav>
-        <a href="#features">Features</a>
-        <a href="#pricing">Pricing</a>
-        <a href="#docs">Docs</a>
-        <a class="cta" href="#get-started">Get started</a>
-      </nav>
-    </header>
-
-    <main>
-      <section class="hero">
-        <div>
-          <div class="eyebrow">Faster content, better SEO</div>
-          <h1>Turn ideas into long-form articles in minutes — with human quality.</h1>
-          <p class="lead">SynapseWrite uses a streaming authoring flow and SEO-aware templates so you can produce publish-ready articles, outlines, or blog series. Export to WordPress or Markdown and ship faster.</p>
-
-          <div class="actions">
-            <a class="btn-primary btn" href="#get-started">Try it free</a>
-            <a class="btn" href="#demo">Watch demo</a>
-          </div>
-
-          <div style="display:flex;gap:16px;margin-top:20px;align-items:center">
-            <div class="card" style="display:flex;gap:12px;align-items:center">
-              <div style="width:56px;height:56px;border-radius:12px;background:linear-gradient(135deg,var(--accent),var(--accent-2));display:grid;place-items:center;font-weight:800">AI</div>
-              <div>
-                <div style="font-weight:700">Streaming mode</div>
-                <div class="small muted">Write collaboratively while the article generates</div>
-              </div>
-            </div>
-
-            <div class="card" style="display:flex;gap:12px;align-items:center">
-              <div style="width:56px;height:56px;border-radius:12px;background:linear-gradient(135deg,#26d07f,#00d4ff);display:grid;place-items:center;font-weight:800">WP</div>
-              <div>
-                <div style="font-weight:700">Export to WordPress</div>
-                <div class="small muted">One-click export and Markdown compatibility</div>
-              </div>
+export default function Page() {
+  return (
+    <main className="min-h-screen bg-gradient-to-b from-[#071021] via-[#081226] to-[#04101a] text-white font-sans">
+      <div className="max-w-6xl mx-auto px-6 py-12">
+        <header className="flex items-center justify-between mb-8">
+          <div className="flex items-center gap-4">
+            <div className="w-12 h-12 rounded-lg bg-gradient-to-br from-purple-500 to-cyan-400 flex items-center justify-center text-black font-extrabold">SW</div>
+            <div>
+              <div className="font-semibold">SynapseWrite</div>
+              <div className="text-sm text-slate-400">AI article generator</div>
             </div>
           </div>
 
-        </div>
+          <nav className="hidden md:flex gap-6 items-center text-slate-300">
+            <a href="#features" className="hover:text-white">Features</a>
+            <a href="#pricing" className="hover:text-white">Pricing</a>
+            <a href="#docs" className="hover:text-white">Docs</a>
+            <a href="#get-started" className="bg-gradient-to-r from-purple-500 to-cyan-400 text-black px-4 py-2 rounded-lg font-semibold">Get started</a>
+          </nav>
+        </header>
 
-        <aside>
-          <div class="card">
-            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
-              <div class="small muted">Starter</div>
-              <div class="price">Free • Forever</div>
-            </div>
-            <div style="font-weight:700">support@synapsewrite.io</div>
-            <div class="features">
-              <div class="small muted">5 users • 5 GB/user • WordPress export • SEO score</div>
-            </div>
-            <div style="margin-top:12px;display:flex;gap:8px">
-              <a class="btn-primary btn" href="#get-started">Create account</a>
-              <a class="btn" href="#contact">Contact sales</a>
-            </div>
-          </div>
-        </aside>
-      </section>
-
-      <section id="features">
-        <h2 style="margin:0 0 8px 0">What it does</h2>
-        <p class="muted small">From brief to publishable article — faster and more consistent.</p>
-
-        <div class="features-grid">
-          <div class="feature">
-            <h4>Streaming authoring</h4>
-            <p>Generate sections live while you edit — reduces waiting and improves iteration speed.</p>
-          </div>
-          <div class="feature">
-            <h4>SEO-aware templates</h4>
-            <p>Built-in keyword & structure guidance so each article is optimized for search.</p>
-          </div>
-          <div class="feature">
-            <h4>Easy export</h4>
-            <p>Export to WordPress or Markdown with images, headings, and metadata preserved.</p>
-          </div>
-          <div class="feature">
-            <h4>Team & roles</h4>
-            <p>Invite writers, assign roles, and manage drafts in shared workspaces.</p>
-          </div>
-          <div class="feature">
-            <h4>Fast previews</h4>
-            <p>Live preview and content score to help you iterate faster.</p>
-          </div>
-          <div class="feature">
-            <h4>Integrations</h4>
-            <p>WordPress, Google Docs export, and API access for automation workflows.</p>
-          </div>
-        </div>
-      </section>
-
-      <section id="cta" style="margin:36px 0;padding:28px;border-radius:12px;background:linear-gradient(90deg, rgba(124,92,255,0.08), rgba(0,212,255,0.03));">
-        <div style="display:flex;justify-content:space-between;align-items:center;gap:20px;flex-wrap:wrap">
+        <section className="grid lg:grid-cols-2 gap-10 items-center">
           <div>
-            <div style="font-weight:800;font-size:18px">Ready to ship content faster?</div>
-            <div class="muted small">Create your free workspace and start publishing today.</div>
-          </div>
-          <div style="display:flex;gap:12px">
-            <a class="btn-primary btn" href="#get-started">Sign up free</a>
-            <a class="btn" href="#demo">Live demo</a>
-          </div>
-        </div>
-      </section>
+            <span className="inline-block px-3 py-1 rounded-full bg-gradient-to-r from-purple-700/10 to-cyan-400/6 text-sm font-semibold text-purple-300">Faster content, better SEO</span>
+            <h1 className="mt-6 text-4xl lg:text-5xl font-extrabold leading-tight">Turn ideas into long-form articles in minutes — with human quality.</h1>
+            <p className="mt-4 text-slate-300 max-w-2xl">SynapseWrite uses a streaming authoring flow and SEO-aware templates so you can produce publish-ready articles, outlines, or blog series. Export to WordPress or Markdown and ship faster.</p>
 
-    </main>
+            <div className="mt-6 flex gap-3">
+              <a href="#get-started" className="px-5 py-3 rounded-lg font-semibold bg-gradient-to-r from-purple-500 to-cyan-400 text-black">Try it free</a>
+              <a href="#demo" className="px-5 py-3 rounded-lg border border-white/10 text-white">Watch demo</a>
+            </div>
 
-    <footer>
-      <div>
-        <div style="font-weight:700">SynapseWrite</div>
-        <div class="muted small">Made for creators — support@synapsewrite.io</div>
+            <div className="mt-6 flex gap-4">
+              <div className="p-3 rounded-xl bg-white/3 border border-white/6 flex items-center gap-3">
+                <div className="w-12 h-12 rounded-lg bg-gradient-to-br from-purple-500 to-cyan-400 flex items-center justify-center font-bold text-black">AI</div>
+                <div>
+                  <div className="font-semibold">Streaming mode</div>
+                  <div className="text-sm text-slate-400">Write collaboratively while the article generates</div>
+                </div>
+              </div>
+
+              <div className="p-3 rounded-xl bg-white/3 border border-white/6 flex items-center gap-3">
+                <div className="w-12 h-12 rounded-lg bg-gradient-to-br from-green-400 to-cyan-400 flex items-center justify-center font-bold text-black">WP</div>
+                <div>
+                  <div className="font-semibold">Export to WordPress</div>
+                  <div className="text-sm text-slate-400">One-click export and Markdown compatibility</div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <aside>
+            <div className="p-6 rounded-2xl bg-gradient-to-b from-white/3 to-white/2 border border-white/6 shadow-lg">
+              <div className="flex items-center justify-between mb-4">
+                <div className="text-sm text-slate-300">Starter</div>
+                <div className="text-xl font-extrabold">Free • Forever</div>
+              </div>
+
+              <div className="font-semibold text-lg">support@synapsewrite.io</div>
+              <div className="text-sm text-slate-400 mt-2">5 users • 5 GB/user • WordPress export • SEO score</div>
+
+              <div className="mt-4 flex gap-3">
+                <a href="#get-started" className="px-4 py-2 rounded-lg font-semibold bg-gradient-to-r from-purple-500 to-cyan-400 text-black">Create account</a>
+                <a href="#contact" className="px-4 py-2 rounded-lg border border-white/10">Contact sales</a>
+              </div>
+            </div>
+          </aside>
+        </section>
+
+        <section id="features" className="mt-16">
+          <h2 className="text-2xl font-extrabold">What it does</h2>
+          <p className="text-sm text-slate-400 mt-1">From brief to publishable article — faster and more consistent.</p>
+
+          <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-6 mt-6">
+            <Feature title="Streaming authoring" desc="Generate sections live while you edit — reduces waiting and improves iteration speed." />
+            <Feature title="SEO-aware templates" desc="Built-in keyword & structure guidance so each article is optimized for search." />
+            <Feature title="Easy export" desc="Export to WordPress or Markdown with images, headings, and metadata preserved." />
+            <Feature title="Team & roles" desc="Invite writers, assign roles, and manage drafts in shared workspaces." />
+            <Feature title="Fast previews" desc="Live preview and content score to help you iterate faster." />
+            <Feature title="Integrations" desc="WordPress, Google Docs export, and API access for automation workflows." />
+          </div>
+        </section>
+
+        <section className="mt-12 p-6 rounded-xl bg-gradient-to-r from-purple-700/6 to-cyan-400/6 flex items-center justify-between">
+          <div>
+            <div className="font-extrabold text-lg">Ready to ship content faster?</div>
+            <div className="text-sm text-slate-400">Create your free workspace and start publishing today.</div>
+          </div>
+          <div className="flex gap-3">
+            <a href="#get-started" className="px-4 py-2 rounded-lg font-semibold bg-gradient-to-r from-purple-500 to-cyan-400 text-black">Sign up free</a>
+            <a href="#demo" className="px-4 py-2 rounded-lg border border-white/10">Live demo</a>
+          </div>
+        </section>
+
+        <footer className="mt-12 flex items-center justify-between text-slate-400 text-sm">
+          <div>
+            <div className="font-semibold">SynapseWrite</div>
+            <div>Made for creators — support@synapsewrite.io</div>
+          </div>
+
+          <div>© 2025 SynapseWrite — Built with care</div>
+        </footer>
       </div>
+    </main>
+  );
+}
 
-      <div class="muted small">© 2025 SynapseWrite — Built with care</div>
-    </footer>
-  </div>
-</body>
-</html>
+function Feature({ title, desc }) {
+  return (
+    <div className="p-5 rounded-xl bg-white/3 border border-white/6">
+      <h4 className="font-semibold mb-2">{title}</h4>
+      <p className="text-sm text-slate-300">{desc}</p>
+    </div>
+  );
+}
