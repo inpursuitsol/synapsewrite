@@ -14,10 +14,10 @@ export default function Page() {
           </p>
 
           <div className="ctas">
-            {/* Primary CTA: Create account (conversion) */}
-            <a className="btn primary" href="/signup">Create account</a>
+            {/* Primary: Try it free -> /generate */}
+            <a className="btn primary" href="/generate">Try it free</a>
 
-            {/* Secondary CTA: Demo/try — lower emphasis, external or route */}
+            {/* Secondary: Watch demo -> external */}
             <a className="btn secondary" href="https://your-demo-link.example" target="_blank" rel="noreferrer">Watch demo</a>
           </div>
 
@@ -48,9 +48,9 @@ export default function Page() {
             <div className="email">support@synapsewrite.io</div>
             <div className="meta">5 users • 5 GB/user • WordPress export</div>
 
-            <div className="pricing-actions">
-              {/* Keep the panel small and non-redundant: only one button that complements the hero */}
-              <a className="btn outline small" href="mailto:support@synapsewrite.io">Contact sales</a>
+            {/* Contact sales is a text link (not a competing button) */}
+            <div style="margin-top:14px">
+              <a className="contact-sales" href="mailto:support@synapsewrite.io">Contact sales</a>
             </div>
           </div>
         </aside>
@@ -98,8 +98,6 @@ export default function Page() {
         .btn{display:inline-flex;align-items:center;gap:10px;padding:12px 18px;border-radius:12px;text-decoration:none;font-weight:700;font-size:15px}
         .btn.primary{background:linear-gradient(90deg,#0b69ff,#00c2ff);color:white;box-shadow:0 18px 40px rgba(11,105,255,0.12)}
         .btn.secondary{background:transparent;border:1px solid rgba(15,23,36,0.06);color:#0f1724}
-        .btn.outline{background:transparent;border:1px solid rgba(15,23,36,0.06);color:#0f1724}
-        .btn.small{padding:8px 10px;border-radius:10px}
 
         .features{display:flex;gap:14px;margin-top:20px;flex-wrap:wrap}
         .feature-card{display:flex;gap:12px;align-items:center;padding:14px;border-radius:14px;background:white;border:1px solid rgba(15,23,36,0.04);min-width:260px;box-shadow:0 8px 30px rgba(2,6,23,0.04);text-decoration:none;color:inherit}
@@ -115,7 +113,7 @@ export default function Page() {
         .price{font-weight:800;margin-top:6px}
         .email{margin-top:12px;font-weight:700}
         .meta{color:#6b7280;margin-top:8px;font-size:13px}
-        .pricing-actions{display:flex;gap:10px;margin-top:14px}
+        .contact-sales{color:#0b69ff;text-decoration:underline;font-weight:600}
 
         .info-grid{display:grid;grid-template-columns:220px 1fr;gap:20px;align-items:start;margin-top:34px}
         .left-label{padding-top:6px}
@@ -127,9 +125,7 @@ export default function Page() {
         .grid-card{background:white;padding:20px;border-radius:12px;border:1px solid rgba(15,23,36,0.04);min-height:90px;box-shadow:0 12px 36px rgba(2,6,23,0.04)}
         .grid-card h4{margin:0 0 8px;font-family:Poppins,Inter;font-size:16px}
         .grid-card p{margin:0;color:#6b7280}
-
         .grid-card.empty{background:transparent;border:none;box-shadow:none}
-
         .muted{color:#6b7280}
 
         @media (max-width:980px){
