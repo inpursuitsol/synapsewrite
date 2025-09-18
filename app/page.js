@@ -49,7 +49,7 @@ export default function Page() {
             <div className="meta">5 users • 5 GB/user • WordPress export</div>
 
             {/* Contact sales is a text link (not a competing button) */}
-            <div style="margin-top:14px">
+            <div style={{ marginTop: 14 }}>
               <a className="contact-sales" href="mailto:support@synapsewrite.io">Contact sales</a>
             </div>
           </div>
