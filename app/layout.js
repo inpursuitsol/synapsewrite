@@ -21,9 +21,10 @@ export default function RootLayout({ children }) {
 
             <nav className="nav" role="navigation" aria-label="Main">
               <a className="nav-link" href="/generate">Write</a>
+              <a className="nav-link" href="/features/streaming">Features</a>
               <a className="nav-link" href="/pricing">Pricing</a>
               <a className="nav-link" href="/docs">Docs</a>
-              <a className="nav-cta" href="mailto:support@synapsewrite.io">Contact</a>
+              <a className="nav-cta" href="/signup">Create account</a>
             </nav>
           </header>
 
@@ -36,7 +37,7 @@ export default function RootLayout({ children }) {
         </div>
 
         <style>{`
-          /* Global shell: premium, clean typography */
+          /* Global shell: premium, clean typography + animations */
           @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&family=Poppins:wght@600;700&display=swap');
 
           :root{
@@ -44,26 +45,34 @@ export default function RootLayout({ children }) {
             --card: #ffffff;
             --muted: #6b7280;
             --accent: #0b69ff;
-            --accent-2: #10b981;
+            --accent-2: #00c2ff;
             --text: #0f1724;
+            --glass: rgba(15,23,36,0.04);
           }
 
           html,body{height:100%;margin:0;background:var(--bg);color:var(--text);font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Arial;}
-          .root-shell{min-height:100vh;display:flex;flex-direction:column}
-          .topbar{display:flex;align-items:center;justify-content:space-between;padding:20px 40px;border-bottom:1px solid rgba(15,23,36,0.04);background:rgba(255,255,255,0.9);backdrop-filter: blur(6px)}
+          .root-shell{min-height:100vh;display:flex;flex-direction:column;transition:background .25s ease}
+          .topbar{display:flex;align-items:center;justify-content:space-between;padding:18px 36px;border-bottom:1px solid rgba(15,23,36,0.04);background:linear-gradient(180deg, rgba(255,255,255,0.9), rgba(255,255,255,0.85));backdrop-filter: blur(6px)}
           .left{display:flex;align-items:center;gap:16px}
-          .logo{display:grid;place-items:center;width:54px;height:54px;border-radius:12px;background:linear-gradient(135deg,#0b69ff,#00c2ff);color:white;font-weight:800;text-decoration:none;font-family:Poppins,Inter}
+          .logo{display:grid;place-items:center;width:56px;height:56px;border-radius:12px;background:linear-gradient(135deg,var(--accent),var(--accent-2));color:white;font-weight:800;text-decoration:none;font-family:Poppins,Inter}
           .brand-title{font-weight:700;font-size:20px; font-family:Poppins, Inter, system-ui; letter-spacing:-0.4px}
           .brand-sub{font-size:13px;color:var(--muted);margin-top:2px}
 
           .nav{display:flex;gap:14px;align-items:center}
-          .nav-link{text-decoration:none;color:var(--muted);padding:8px 12px;border-radius:9px;font-weight:600}
+          .nav-link{text-decoration:none;color:var(--muted);padding:8px 12px;border-radius:9px;font-weight:600;transition:background .18s, color .18s}
           .nav-link:hover{background:rgba(11,105,255,0.06);color:var(--text)}
-          .nav-cta{text-decoration:none;background:linear-gradient(90deg,#0b69ff,#00c2ff);color:white;padding:8px 12px;border-radius:10px;font-weight:700}
+          .nav-cta{text-decoration:none;background:linear-gradient(90deg,var(--accent),var(--accent-2));color:white;padding:8px 12px;border-radius:10px;font-weight:700;box-shadow:0 10px 30px rgba(11,105,255,0.08)}
 
-          .main{flex:1;max-width:1200px;margin:32px auto;padding:0 28px 48px}
+          .main{flex:1;max-width:1180px;margin:28px auto;padding:0 28px 48px}
           .footer{padding:18px 36px;border-top:1px solid rgba(15,23,36,0.04);display:flex;justify-content:space-between;color:var(--muted)}
           .footer-right a{color:var(--text);text-decoration:underline}
+
+          /* Shared micro-animations */
+          .fade-in { animation: fadeIn .42s cubic-bezier(.2,.9,.2,1) both; }
+          .lift { transition: transform .18s cubic-bezier(.2,.9,.2,1), box-shadow .18s; }
+          .lift:hover { transform: translateY(-6px); box-shadow: 0 18px 48px rgba(2,6,23,0.08); }
+
+          @keyframes fadeIn { from { opacity:0; transform: translateY(6px) } to { opacity:1; transform:none } }
 
           @media (max-width:900px){
             .nav{display:none}
