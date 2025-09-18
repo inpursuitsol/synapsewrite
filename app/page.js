@@ -17,6 +17,7 @@ export default function Page() {
         <nav className="sw-nav">
           <a href="/generate" className="sw-link">Features</a>
           <a href="/generate" className="sw-link">Pricing</a>
+          {/* Replace the demo link below with your real Loom/YouTube URL */}
           <a href="https://your-demo-link.example" className="sw-link" target="_blank" rel="noreferrer">Demo</a>
           <a href="mailto:support@synapsewrite.io" className="sw-cta">Contact</a>
         </nav>
@@ -113,7 +114,7 @@ export default function Page() {
       </footer>
 
       <style>{`
-        /* Simple no-Tailwind styling (overwrite app/page.js with this file) */
+        /* Simple no-Tailwind styling for app/page.js */
         .sw-root{font-family:Inter,system-ui,Arial,sans-serif;color:#eef2f7;background:linear-gradient(180deg,#071021,#04101a);padding:28px;min-height:100vh;}
         .sw-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:24px;}
         .sw-brand{display:flex;align-items:center;gap:12px;font-weight:700}
