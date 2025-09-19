@@ -18,39 +18,41 @@ export default function LandingPage() {
             </div>
 
             <div className="trust">
-              <div className="trust-pill">Export to WordPress</div>
-              <div className="trust-pill">Streaming authoring</div>
-              <div className="trust-pill">SEO templates</div>
+              <a className="trust-pill" href="/features/export">Export to WordPress</a>
+              <a className="trust-pill" href="/features/streaming">Streaming authoring</a>
+              <a className="trust-pill" href="/features/seo">SEO templates</a>
             </div>
           </div>
 
-          <div className="hero-right" aria-hidden>
-            {/* Elegant, minimal product mock — not interactive, just visual */}
-            <div className="mock">
-              <div className="mock-top">
-                <div className="mock-title">Generate Article</div>
-                <div className="mock-badge">Demo</div>
-              </div>
-
-              <div className="mock-body">
-                <div className="mock-inputrow">
-                  <div className="mock-input short" />
-                  <div className="mock-input small" />
-                </div>
-                <div className="mock-input" />
-                <div className="mock-buttons">
-                  <div className="mock-btn primary" />
-                  <div className="mock-btn" />
+          {/* RIGHT: clickable mock that opens the editor (or demo) */}
+          <div className="hero-right">
+            <a href="/generate" className="mock-link" aria-label="Open editor">
+              <div className="mock" role="img" aria-hidden="true">
+                <div className="mock-top">
+                  <div className="mock-title">Generate Article</div>
+                  <div className="mock-badge">Demo</div>
                 </div>
 
-                <div className="mock-article">
-                  <div className="mock-line short" />
-                  <div className="mock-line" />
-                  <div className="mock-line" />
-                  <div className="mock-line long" />
+                <div className="mock-body">
+                  <div className="mock-inputrow">
+                    <div className="mock-input short" />
+                    <div className="mock-input small" />
+                  </div>
+                  <div className="mock-input" />
+                  <div className="mock-buttons">
+                    <div className="mock-btn primary" />
+                    <div className="mock-btn" />
+                  </div>
+
+                  <div className="mock-article">
+                    <div className="mock-line short" />
+                    <div className="mock-line" />
+                    <div className="mock-line" />
+                    <div className="mock-line long" />
+                  </div>
                 </div>
               </div>
-            </div>
+            </a>
           </div>
         </div>
       </header>
@@ -121,11 +123,15 @@ export default function LandingPage() {
         .cta-secondary{text-decoration:none;padding:10px 16px;border-radius:10px;border:1px solid rgba(15,23,36,0.06);color:var(--text);font-weight:600}
 
         .trust{display:flex;gap:10px;flex-wrap:wrap;margin-top:6px}
-        .trust-pill{background:var(--card);padding:8px 12px;border-radius:10px;border:1px solid rgba(15,23,36,0.04);font-weight:600;color:var(--muted);font-size:14px}
+        .trust-pill{background:var(--card);padding:8px 12px;border-radius:10px;border:1px solid rgba(15,23,36,0.04);font-weight:600;color:var(--muted);font-size:14px;text-decoration:none}
+        .trust-pill:hover{box-shadow: 0 10px 30px rgba(2,6,23,0.04);color:var(--text)}
 
         /* Right mock */
         .hero-right{width:420px}
-        .mock{background:linear-gradient(180deg, #ffffff, #fbfdff);border-radius:14px;border:1px solid rgba(15,23,36,0.04);padding:14px;box-shadow:0 18px 48px rgba(2,6,23,0.04)}
+        .mock-link { display: block; text-decoration: none; color: inherit; }
+        .mock-link:focus { outline: 3px solid rgba(11,105,255,0.16); border-radius: 12px; }
+        .mock{background:linear-gradient(180deg, #ffffff, #fbfdff);border-radius:14px;border:1px solid rgba(15,23,36,0.04);padding:14px;box-shadow:0 18px 48px rgba(2,6,23,0.04);transition:transform .18s ease,box-shadow .18s}
+        .mock-link:hover .mock { transform: translateY(-6px); box-shadow: 0 22px 60px rgba(2,6,23,0.06); }
         .mock-top{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px}
         .mock-title{font-weight:700}
         .mock-badge{background:linear-gradient(90deg,var(--accent-start),var(--accent-end));color:white;padding:6px 10px;border-radius:8px;font-weight:700;font-size:12px}
