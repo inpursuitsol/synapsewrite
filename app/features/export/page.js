@@ -1,7 +1,7 @@
 // app/features/export/page.js
 export default function ExportFeature() {
   return (
-    <div style={{ maxWidth: 980, margin: "0 auto", paddingTop: 18, paddingBottom: 60 }}>
+    <div style={{ maxWidth: 980, margin: "0 auto", paddingTop: 36, paddingBottom: 60 }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
         <div>
           <h1 style={{ margin: 0, fontSize: 28, fontFamily: "Poppins, Inter" }}>Export to WordPress</h1>
@@ -17,11 +17,7 @@ export default function ExportFeature() {
         <ul style={{ color: "#374151" }}>
           <li>Transforms editor content to WordPress-ready HTML and metadata.</li>
           <li>Supports images, headings, links, and frontmatter (for Markdown export).</li>
-          <li>Optionally publish via WordPress REST API (connect with OAuth tokens in future).</li>
         </ul>
-
-        <h4 style={{ marginTop: 16 }}>Next steps</h4>
-        <p style={{ color: "#374151" }}>We can add a one-click publish pipeline that posts directly to your site — tell me which WordPress setup you use and I’ll scaffold it.</p>
       </div>
     </div>
   );
