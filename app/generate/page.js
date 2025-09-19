@@ -1,9 +1,14 @@
 // app/generate/page.js
 "use client";
 
-import { useState, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
+import { useSearchParams, useRouter } from "next/navigation";
 
 export default function GeneratePage() {
+  const searchParams = useSearchParams();
+  const router = useRouter();
+  const demoMode = searchParams?.get("demo") === "1";
+
   const [title, setTitle] = useState("");
   const [keywords, setKeywords] = useState("");
   const [length, setLength] = useState("medium");
@@ -13,11 +18,47 @@ export default function GeneratePage() {
   const [score, setScore] = useState(null);
   const textRef = useRef(null);
 
-  const wordCount = (t) => (t ? t.trim().split(/\s+/).length : 0);
+  useEffect(() => {
+    if (demoMode) {
+      setTitle("How AI is changing content marketing in 2025");
+      setKeywords("AI,content marketing,SEO");
+      setLength("medium");
+      setArticle(`# How AI is changing content marketing in 2025
+
+The world of content marketing is shifting rapidly thanks to AI...
+
+## Key trends
+- Faster production cycles
+- Better research automation
+- Personalized content at scale
+
+## How to use this
+1. Edit headlines
+2. Regenerate sections
+3. Export to WordPress
+`);
+      setTimeout(() => textRef.current?.scrollIntoView({ behavior: "smooth", block: "center" }), 250);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [demoMode]);
+
+  const wordCount = (t) => (t ? t.trim().split(/\s+/).filter(Boolean).length : 0);
 
   function toast(msg) {
-    // simple ephemeral visual feedback via alert fallback if needed
-    try { window.__synapse_toast && window.__synapse_toast(msg); } catch {}
+    if (typeof window !== "undefined") {
+      const el = document.createElement("div");
+      el.textContent = msg;
+      el.style.position = "fixed";
+      el.style.right = "20px";
+      el.style.bottom = "24px";
+      el.style.background = "rgba(15,23,36,0.9)";
+      el.style.color = "white";
+      el.style.padding = "10px 14px";
+      el.style.borderRadius = "8px";
+      el.style.zIndex = 9999;
+      document.body.appendChild(el);
+      setTimeout(() => el.remove(), 2200);
+    }
   }
 
   function downloadMarkdown() {
@@ -52,16 +93,15 @@ export default function GeneratePage() {
     setScore(null);
     let p = 0;
     const interval = setInterval(() => {
-      p += Math.floor(Math.random() * 12) + 6;
+      p += Math.floor(Math.random() * 10) + 6;
       if (p >= 98) p = 98;
       setProgress(p);
-    }, 220);
+    }, 200);
 
     const wait = length === "short" ? 900 : length === "long" ? 4200 : 2400;
     setTimeout(() => {
       clearInterval(interval);
       setProgress(100);
-
       const kw = keywords ? `\n\n**Keywords:** ${keywords}` : "";
       const body = [
         `# ${title}`,
@@ -78,107 +118,165 @@ export default function GeneratePage() {
         "Step-by-step guidance and examples.",
         "",
         "## Conclusion",
-        "Wrap up and CTA."
+        "Wrap up and CTA.",
       ].join("\n\n");
       const multiplier = length === "short" ? 1 : length === "medium" ? 2 : 3;
       setArticle(Array.from({ length: multiplier }).map(() => body).join("\n\n") + kw);
-
       const base = 60 + Math.min(28, Math.floor(title.length / 2));
       const bonus = keywords ? 8 : 0;
       const rng = Math.floor(Math.random() * 10);
       setScore(Math.min(98, base + bonus + rng));
-
       setLoading(false);
     }, wait);
   }
 
+  function openDemo() {
+    router.push("/generate?demo=1");
+  }
+
   return (
-    <div style={{ maxWidth: 1200, margin: "0 auto", paddingTop: 8 }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 14 }}>
+    <div className="generate-root">
+      <div className="generate-head">
         <div>
-          <h1 style={{ margin: 0, fontSize: 28 }}>Generate Article</h1>
-          <div style={{ color: "#6b7280", marginTop: 6 }}>Enter an idea, choose length, and click generate.</div>
+          <h1 className="gen-title">Generate Article</h1>
+          <div className="gen-sub">Enter an idea, choose length, and click generate.</div>
         </div>
-        <div style={{ display: "flex", gap: 10 }}>
-          <a href="/" style={{ padding: "8px 12px", borderRadius: 10, background: "transparent", border: "1px solid rgba(15,23,36,0.06)", textDecoration: "none", color: "#0f1724" }}>Home</a>
-          <a href="/docs" style={{ padding: "8px 12px", borderRadius: 10, background: "linear-gradient(90deg,#0b69ff,#00c2ff)", color: "white", textDecoration: "none" }}>Docs</a>
+
+        <div className="head-actions">
+          <button onClick={openDemo} className="btn demo">Demo</button>
         </div>
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 360px", gap: 20 }}>
-        <div style={{ background: "white", padding: 18, borderRadius: 12, border: "1px solid rgba(15,23,36,0.04)" }}>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 220px", gap: 10 }}>
-            <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Article title or idea" style={{ padding: 12, borderRadius: 10, border: "1px solid rgba(15,23,36,0.04)" }} />
-            <select value={length} onChange={(e) => setLength(e.target.value)} style={{ padding: 12, borderRadius: 10, border: "1px solid rgba(15,23,36,0.04)" }}>
+      <div className="generate-grid">
+        <div className="editor-card">
+          <div className="inputs-row">
+            <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Article title or idea" className="input title" />
+            <select value={length} onChange={(e) => setLength(e.target.value)} className="input select">
               <option value="short">Short (300–500)</option>
               <option value="medium">Medium (600–900)</option>
               <option value="long">Long (1200–1800)</option>
             </select>
           </div>
 
-          <div style={{ marginTop: 10 }}>
-            <input value={keywords} onChange={(e) => setKeywords(e.target.value)} placeholder="Comma-separated keywords (optional)" style={{ width: "100%", padding: 12, borderRadius: 10, border: "1px solid rgba(15,23,36,0.04)" }} />
-          </div>
-
-          <div style={{ display: "flex", gap: 10, marginTop: 12 }}>
-            <button onClick={generate} disabled={loading} style={{ padding: "10px 14px", borderRadius: 10, border: "none", background: "linear-gradient(90deg,#0b69ff,#00c2ff)", color: "white", fontWeight: 700 }}>
-              {loading ? "Generating…" : "Generate Article"}
-            </button>
-            <button onClick={copyToClipboard} style={{ padding: "10px 14px", borderRadius: 10, border: "1px solid rgba(15,23,36,0.06)", background: "transparent" }}>Copy</button>
-            <button onClick={downloadMarkdown} style={{ padding: "10px 14px", borderRadius: 10, border: "1px solid rgba(15,23,36,0.06)", background: "transparent" }}>Download .md</button>
-            <div style={{ marginLeft: "auto", color: "#6b7280", alignSelf: "center" }}>Words: <strong>{wordCount(article)}</strong></div>
-          </div>
-
           <div style={{ marginTop: 12 }}>
-            <div style={{ color: "#6b7280", marginBottom: 8 }}>Progress: {progress}%</div>
-            <div style={{ height: 8, background: "rgba(15,23,36,0.04)", borderRadius: 999 }}>
-              <div style={{ height: "100%", width: `${progress}%`, background: "linear-gradient(90deg,#ffd86f,#7be29a)", transition: "width 300ms linear" }} />
+            <input value={keywords} onChange={(e) => setKeywords(e.target.value)} placeholder="Comma-separated keywords (optional)" className="input full" />
+          </div>
+
+          <div className="actions-row">
+            <button onClick={generate} disabled={loading} className="primary-btn">{loading ? "Generating…" : "Generate Article"}</button>
+            <button onClick={copyToClipboard} className="ghost-btn">Copy</button>
+            <button onClick={downloadMarkdown} className="ghost-btn">Download .md</button>
+            <div className="wordcount">Words: <strong>{wordCount(article)}</strong></div>
+          </div>
+
+          <div className="progress-wrap">
+            <div className="progress-label">Progress: {progress}%</div>
+            <div className="progress-bar">
+              <div className="progress-fill" style={{ width: `${progress}%` }} />
             </div>
           </div>
 
-          <div style={{ marginTop: 16 }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 8 }}>
-              <div>
-                <div style={{ fontWeight: 700 }}>Generated article preview</div>
-                <div style={{ color: "#6b7280", fontSize: 13 }}>Edit, copy, or download the markdown.</div>
-              </div>
-              <div style={{ color: "#6b7280", fontSize: 13 }}>{loading ? "Generating" : article ? "Ready" : "Idle"}</div>
+          <div className="preview-head">
+            <div>
+              <div className="preview-title">Generated article preview</div>
+              <div className="preview-sub">Edit, copy, or download the markdown.</div>
             </div>
-
-            <textarea ref={textRef} value={article} onChange={(e) => setArticle(e.target.value)} rows={16} style={{ width: "100%", padding: 12, borderRadius: 10, border: "1px solid rgba(15,23,36,0.04)", fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, monospace" }} />
+            <div className="preview-status">{loading ? "Generating" : article ? "Ready" : "Idle"}</div>
           </div>
+
+          <textarea ref={textRef} value={article} onChange={(e) => setArticle(e.target.value)} className="editor-text" rows={20} />
         </div>
 
-        <aside style={{ position: "sticky", top: 94 }}>
-          <div style={{ background: "white", padding: 16, borderRadius: 12, border: "1px solid rgba(15,23,36,0.04)" }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <div style={{ fontWeight: 700 }}>SEO Score</div>
-              <div style={{ color: "#6b7280", fontSize: 13 }}>Realtime checks</div>
+        <aside className="sidebar">
+          <div className="seo-card">
+            <div className="seo-head">
+              <div className="seo-title">SEO Score</div>
+              <div className="seo-sub">Realtime checks</div>
             </div>
 
-            <div style={{ height: 10, background: "rgba(15,23,36,0.04)", borderRadius: 999, marginTop: 12 }}>
-              <div style={{ height: "100%", width: `${score ?? 0}%`, background: "linear-gradient(90deg,#ffd86f,#7be29a)", transition: "width 300ms ease" }} />
+            <div className="seo-bar">
+              <div className="seo-fill" style={{ width: `${score ?? 0}%` }} />
             </div>
 
-            <div style={{ fontSize: 28, fontWeight: 800, marginTop: 10 }}>{score ?? "--"}</div>
-            <div style={{ color: "#6b7280", fontSize: 13, marginBottom: 12 }}>{score ? (score >= 80 ? "Excellent" : score >= 65 ? "Good" : "Needs work") : "Generate to evaluate"}</div>
+            <div className="score-large">{score ?? "--"}</div>
+            <div className="score-desc">{score ? (score >= 80 ? "Excellent" : score >= 65 ? "Good" : "Needs work") : "Generate to evaluate"}</div>
 
-            <div style={{ borderTop: "1px solid rgba(15,23,36,0.04)", paddingTop: 10 }}>
-              <div style={{ color: "#6b7280", fontSize: 13 }}>Quick checks</div>
-              <ul style={{ marginTop: 8, color: "#6b7280", lineHeight: 1.7 }}>
-                <li>• Title length: {title.length > 10 ? "OK" : "Short"}</li>
-                <li>• Keywords present: {keywords ? "Yes" : "No"}</li>
-                <li>• Word count: {wordCount(article) > 500 ? "Good" : "Low"}</li>
+            <div className="quick-checks">
+              <ul>
+                <li>Title length: {title.length > 10 ? "OK" : "Short"}</li>
+                <li>Keywords present: {keywords ? "Yes" : "No"}</li>
+                <li>Word count: {wordCount(article) > 500 ? "Good" : "Low"}</li>
               </ul>
             </div>
 
-            <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
-              <a href="mailto:support@synapsewrite.io" style={{ flex: 1, padding: 10, borderRadius: 8, border: "1px solid rgba(15,23,36,0.06)", textDecoration: "none", color: "#0f1724", textAlign: "center" }}>Contact support</a>
-              <a href="/docs" style={{ flex: 1, padding: 10, borderRadius: 8, border: "1px solid rgba(15,23,36,0.06)", textDecoration: "none", color: "#0f1724", textAlign: "center" }}>Docs</a>
+            <div className="side-actions">
+              <a href="mailto:support@synapsewrite.io" className="side-btn">Contact support</a>
+              <a href="/docs" className="side-btn">Docs</a>
             </div>
           </div>
         </aside>
       </div>
+
+      <style>{`
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600&family=Poppins:wght@600;700&display=swap');
+
+        .generate-root { max-width: 1440px; margin: 0 auto; padding: 28px 22px 80px; font-family: Inter, system-ui, -apple-system, "Segoe UI", Roboto, Arial; color: #0f1724; }
+        .generate-head { display:flex; justify-content:space-between; align-items:flex-end; margin-bottom:20px; gap: 20px; }
+        .gen-title { margin:0; font-family: Poppins, Inter; font-weight:600; font-size:28px; }
+        .gen-sub { color:#6b7280; margin-top:6px; }
+
+        .head-actions { display:flex; gap:12px; }
+        .btn.demo { background: linear-gradient(90deg,#0b69ff,#00c2ff); color:white; border:none; padding:8px 12px; border-radius:10px; font-weight:700; cursor:pointer; }
+
+        /* grid - give left editor more space */
+        .generate-grid { display:grid; grid-template-columns: 1.8fr 360px; gap: 26px; align-items:start; }
+
+        .editor-card { background: white; padding: 20px; border-radius:12px; border:1px solid rgba(15,23,36,0.04); }
+        .inputs-row { display:grid; grid-template-columns: 1fr 220px; gap:12px; }
+
+        .input { padding:14px; border-radius:10px; border:1px solid rgba(15,23,36,0.06); font-size:15px; }
+        .input.title { font-weight:600; }
+        .input.select { background:white; }
+        .input.full { width:100%; }
+
+        .actions-row { display:flex; gap:10px; align-items:center; margin-top:14px; flex-wrap:wrap; }
+        .primary-btn { background: linear-gradient(90deg,#0b69ff,#00c2ff); color:white; border:none; padding:12px 16px; border-radius:10px; font-weight:700; cursor:pointer; }
+        .ghost-btn { background:transparent; border:1px solid rgba(15,23,36,0.06); padding:10px 14px; border-radius:10px; cursor:pointer; }
+        .wordcount { margin-left:auto; color:#6b7280; font-weight:600; }
+
+        .progress-wrap { margin-top:14px; }
+        .progress-label { color:#6b7280; margin-bottom:8px; }
+        .progress-bar { height:10px; background:rgba(15,23,36,0.04); border-radius:999px; overflow:hidden; }
+        .progress-fill { height:100%; background:linear-gradient(90deg,#ffd86f,#7be29a); transition: width 280ms linear; }
+
+        .preview-head { display:flex; justify-content:space-between; align-items:flex-start; margin-top:16px; margin-bottom:8px; }
+        .preview-title { font-weight:700; }
+        .preview-sub { color:#6b7280; font-size:13px; margin-top:4px; }
+        .preview-status { color:#6b7280; font-size:13px; }
+
+        .editor-text { width:100%; padding:16px; border-radius:10px; border:1px solid rgba(15,23,36,0.06); font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, monospace; font-size:15px; line-height:1.7; min-height:420px; resize:vertical; }
+
+        /* sidebar */
+        .sidebar { position: sticky; top: 92px; align-self:start; }
+        .seo-card { background:white; padding:16px; border-radius:12px; border:1px solid rgba(15,23,36,0.04); width:100%; }
+        .seo-head { display:flex; justify-content:space-between; align-items:center; }
+        .seo-title { font-weight:700; }
+        .seo-sub { color:#6b7280; font-size:13px; }
+        .seo-bar { height:10px; background:rgba(15,23,36,0.04); border-radius:999px; margin-top:12px; overflow:hidden; }
+        .seo-fill { height:100%; background:linear-gradient(90deg,#ffd86f,#7be29a); transition: width 300ms ease; }
+        .score-large { font-weight:800; font-size:22px; margin-top:8px; }
+        .score-desc { color:#6b7280; font-size:13px; margin-bottom:10px; }
+
+        .quick-checks ul { margin:0; padding-left:18px; color:#6b7280; line-height:1.7; }
+        .side-actions { display:flex; gap:8px; margin-top:12px; }
+        .side-btn { flex:1; text-align:center; padding:10px; border-radius:8px; border:1px solid rgba(15,23,36,0.06); text-decoration:none; color:#0f1724; }
+
+        /* responsive */
+        @media (max-width:1100px) {
+          .generate-grid { grid-template-columns: 1fr; }
+          .sidebar { position: static; }
+        }
+      `}</style>
     </div>
   );
 }
