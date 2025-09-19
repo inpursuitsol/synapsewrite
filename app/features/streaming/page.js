@@ -1,7 +1,7 @@
 // app/features/streaming/page.js
 export default function StreamingFeature() {
   return (
-    <div style={{ maxWidth: 980, margin: "0 auto", paddingTop: 18, paddingBottom: 60 }}>
+    <div style={{ maxWidth: 980, margin: "0 auto", paddingTop: 36, paddingBottom: 60 }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
         <div>
           <h1 style={{ margin: 0, fontSize: 28, fontFamily: "Poppins, Inter" }}>Streaming authoring</h1>
@@ -19,9 +19,6 @@ export default function StreamingFeature() {
           <li>Faster iteration — no more waiting for a full article to generate.</li>
           <li>Tighter control — accept, edit, or regenerate sections independently.</li>
         </ul>
-
-        <h4 style={{ marginTop: 16 }}>Examples</h4>
-        <p style={{ color: "#374151" }}>Use streaming for long-form articles where you want to keep editing while the model continues to produce subsequent sections.</p>
       </div>
     </div>
   );
