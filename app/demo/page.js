@@ -8,7 +8,7 @@ export default function DemoPage() {
   const router = useRouter();
 
   useEffect(() => {
-    // client-side redirect so demo param is present
+    // redirect to generate with demo param
     router.push("/generate?demo=1");
   }, [router]);
 
