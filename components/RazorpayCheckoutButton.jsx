@@ -4,7 +4,7 @@ import { useCallback } from "react";
 
 export default function RazorpayCheckoutButton({ amountINR, planName }) {
   const onClick = useCallback(async () => {
-    // 1️⃣ Ask our backend to create a Razorpay Order
+    // 1) Create a Razorpay Order on our server
     const resp = await fetch("/api/create-order", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -12,19 +12,14 @@ export default function RazorpayCheckoutButton({ amountINR, planName }) {
     });
 
     let data;
-    try {
-      data = await resp.json();
-    } catch {
-      data = {};
-    }
+    try { data = await resp.json(); } catch { data = {}; }
     const { order, error } = data || {};
-
     if (!resp.ok || error || !order?.id) {
       alert(error || "Could not create order");
       return;
     }
 
-    // 2️⃣ Open Razorpay popup
+    // 2) Open Razorpay Checkout popup
     const options = {
       key: process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID,
       amount: order.amount,
@@ -32,19 +27,40 @@ export default function RazorpayCheckoutButton({ amountINR, planName }) {
       name: "SynapseWrite",
       description: planName || "Subscription",
       order_id: order.id,
-      handler: function (response) {
-        alert("✅ Payment success (test mode). Thank you!");
-        console.log("Razorpay response:", response);
+
+      // ✅ NEW: verify on the server after Razorpay says "success"
+      handler: async function (response) {
+        // response has: razorpay_payment_id, razorpay_order_id, razorpay_signature
+        const r = await fetch("/api/verify-payment", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ razorpay_response: response }),
+        });
+        const v = await r.json();
+        if (v.ok) {
+          alert("✅ Payment verified. Thank you!");
+        } else {
+          alert(`⚠️ Verification failed: ${v.error || "unknown error"}`);
+        }
       },
+
       theme: { color: "#0b69ff" },
     };
 
     if (!window.Razorpay) {
-      alert("⚠️ Razorpay script not loaded yet. Refresh and try again.");
+      alert("Razorpay script not loaded yet. Refresh and try again.");
       return;
     }
 
     const rzp = new window.Razorpay(options);
+
+    // ✅ NEW: helpful error message if payment fails in the popup
+    rzp.on("payment.failed", function (resp) {
+      const err = resp?.error || {};
+      console.error("Razorpay payment.failed", err);
+      alert(`Payment failed: ${err.description || err.reason || err.code || "Unknown error"}`);
+    });
+
     rzp.open();
   }, [amountINR, planName]);
 
