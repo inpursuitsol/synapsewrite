@@ -17,8 +17,8 @@ export default function PricingPage() {
         <RazorpayCheckoutButton
           planName="SynapseWrite Pro — Monthly"
           amountInPaise={9900}
-          // customerEmail="user@example.com"
-          // customerName="Anand Rao"
+          // customerEmail="user@example.com" // optional
+          // customerName="Anand Rao"        // optional
         />
       </div>
 
