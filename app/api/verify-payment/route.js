@@ -1,56 +1,39 @@
 // app/api/verify-payment/route.js
-import { NextResponse } from "next/server";
 import crypto from "crypto";
+
+export const dynamic = "force-dynamic"; // don't cache
+export const runtime = "nodejs";        // ensure Node runtime
 
 export async function POST(req) {
   try {
-    const body = await req.json();
-    const {
-      razorpay_payment_id,
-      razorpay_order_id,
-      razorpay_signature,
-    } = body?.razorpay_response || {};
+    const { razorpay_order_id, razorpay_payment_id, razorpay_signature } = await req.json();
 
-    if (!razorpay_payment_id || !razorpay_order_id || !razorpay_signature) {
-      return NextResponse.json(
-        { ok: false, error: "Missing razorpay fields" },
-        { status: 400 }
-      );
+    if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature) {
+      return new Response(JSON.stringify({ ok: false, error: "Missing fields" }), {
+        status: 400, headers: { "content-type": "application/json" },
+      });
     }
 
     const secret = process.env.RAZORPAY_KEY_SECRET;
     if (!secret) {
-      return NextResponse.json(
-        { ok: false, error: "Server missing RAZORPAY_KEY_SECRET" },
-        { status: 500 }
-      );
+      return new Response(JSON.stringify({ ok: false, error: "Missing RAZORPAY_KEY_SECRET" }), {
+        status: 500, headers: { "content-type": "application/json" },
+      });
     }
 
-    // Expected signature: HMAC_SHA256(order_id|payment_id)
-    const payload = `${razorpay_order_id}|${razorpay_payment_id}`;
-    const expectedSignature = crypto
-      .createHmac("sha256", secret)
-      .update(payload)
-      .digest("hex");
+    // Create expected signature: HMAC_SHA256(order_id|payment_id)
+    const body = `${razorpay_order_id}|${razorpay_payment_id}`;
+    const expected = crypto.createHmac("sha256", secret).update(body).digest("hex");
 
-    const valid = expectedSignature === razorpay_signature;
+    const valid = expected === razorpay_signature;
 
-    if (!valid) {
-      return NextResponse.json(
-        { ok: false, error: "Invalid signature" },
-        { status: 400 }
-      );
-    }
-
-    // TODO: persist success (DB) / provision plan / send email
-    console.log("✅ Verified payment:", {
-      order: razorpay_order_id,
-      payment: razorpay_payment_id,
+    return new Response(JSON.stringify({ ok: valid }), {
+      status: valid ? 200 : 400,
+      headers: { "content-type": "application/json" },
     });
-
-    return NextResponse.json({ ok: true });
   } catch (err) {
-    console.error("verify-payment error", err);
-    return NextResponse.json({ ok: false, error: "Internal error" }, { status: 500 });
+    return new Response(JSON.stringify({ ok: false, error: err?.message || "Verify failed" }), {
+      status: 500, headers: { "content-type": "application/json" },
+    });
   }
 }
