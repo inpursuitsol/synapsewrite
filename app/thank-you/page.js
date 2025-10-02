@@ -10,9 +10,7 @@ export default function ThankYouPage() {
   return (
     <main className="min-h-[80vh] flex items-center">
       <div className="mx-auto max-w-2xl px-6 py-16 text-center">
-        {/* Logo (optional) */}
         <div className="mb-6 flex justify-center">
-          {/* Put /public/logo.png or /public/logo.svg to show your brand */}
           <img
             src="/logo.png"
             alt="SynapseWrite"
@@ -26,8 +24,7 @@ export default function ThankYouPage() {
         </h1>
         <p className="mt-4 text-gray-600 leading-relaxed">
           You’re now on <strong>SynapseWrite Pro</strong>. Enjoy unlimited generations,
-          faster queues, and exports. A payment receipt has been emailed to you (in Test
-          Mode this is simulated).
+          faster queues, and exports.
         </p>
 
         <div className="mt-10 flex flex-col sm:flex-row gap-3 justify-center">
