@@ -74,7 +74,7 @@ export default function RazorpayCheckoutButton({
             const verify = await verifyRes.json();
             if (!verifyRes.ok || verify?.valid !== true) throw new Error("Verification failed");
 
-            // 4) Redirect to /thanks
+            // 4) Redirect to Thank You
             const prettyAmount = `₹${(order.amount / 100).toFixed(2)} ${order.currency}`;
             const params = new URLSearchParams({
               status: "success",
