@@ -3,13 +3,7 @@
 import { useEffect, useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
 
-declare global {
-  interface Window {
-    Razorpay?: any;
-  }
-}
-
-const RAZORPAY_KEY = process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID as string | undefined;
+const RAZORPAY_KEY = process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID;
 
 function useRazorpayScript() {
   const [ready, setReady] = useState(false);
@@ -27,34 +21,36 @@ function useRazorpayScript() {
   return ready;
 }
 
-export default function RazorpayCheckoutButton(props: {
-  planName: string;
-  amountInPaise: number; // e.g. 9900 for ₹99.00
-  customerEmail?: string;
-  customerName?: string;
-  className?: string;
+export default function RazorpayCheckoutButton({
+  planName,
+  amountInPaise,
+  customerEmail,
+  customerName,
+  className,
 }) {
-  const { planName, amountInPaise, customerEmail, customerName, className } = props;
   const router = useRouter();
   const ready = useRazorpayScript();
   const [loading, setLoading] = useState(false);
 
   const handlePay = useCallback(async () => {
     try {
-      if (!RAZORPAY_KEY) throw new Error("Missing NEXT_PUBLIC_RAZORPAY_KEY_ID");
       setLoading(true);
 
       // 1) Create order on server
       const orderRes = await fetch("/api/create-order", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ amount: amountInPaise, currency: "INR", notes: { plan: planName } }),
+        body: JSON.stringify({
+          amount: amountInPaise,
+          currency: "INR",
+          notes: { plan: planName },
+        }),
       });
       if (!orderRes.ok) throw new Error("Failed to create order");
-      const order: { id: string; amount: number; currency: string } = await orderRes.json();
+      const order = await orderRes.json(); // { id, amount, currency }
 
       // 2) Open Razorpay Checkout
-      const rzp = new window.Razorpay!({
+      const rzp = new window.Razorpay({
         key: RAZORPAY_KEY,
         amount: order.amount,
         currency: order.currency,
@@ -63,7 +59,7 @@ export default function RazorpayCheckoutButton(props: {
         order_id: order.id,
         prefill: { email: customerEmail, name: customerName },
         theme: { color: "#000000" },
-        handler: async (resp: any) => {
+        handler: async (resp) => {
           try {
             // 3) Verify on server
             const verifyRes = await fetch("/api/verify-payment", {
@@ -96,7 +92,7 @@ export default function RazorpayCheckoutButton(props: {
         retry: { enabled: true, max_count: 1 },
       });
 
-      rzp.on("payment.failed", (resp: any) => {
+      rzp.on("payment.failed", (resp) => {
         console.error("Payment failed", resp?.error);
         alert(resp?.error?.description || "Payment failed. Please try again.");
         setLoading(false);
