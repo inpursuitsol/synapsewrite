@@ -1,30 +1,90 @@
 // app/pricing/page.js
-import RazorpayCheckoutButton from "../../components/RazorpayCheckoutButton";
+import RazorpayCheckoutButton from "@/components/RazorpayCheckoutButton";
+
+export const metadata = {
+  title: "Pricing — SynapseWrite",
+  description: "Choose a plan that fits your writing workflow."
+};
+
+function Card({ title, price, period, features, cta }) {
+  return (
+    <div className="rounded-2xl bg-white shadow-lg border border-gray-100 p-8 max-w-md w-full">
+      <h3 className="text-xl font-semibold">{title}</h3>
+      <div className="mt-4">
+        <div className="text-4xl font-bold">{price}</div>
+        {period ? <div className="text-gray-500 text-sm mt-1">{period}</div> : null}
+      </div>
+      <ul className="mt-6 space-y-2 text-sm text-gray-700">
+        {features.map((f, i) => (
+          <li key={i} className="flex gap-2">
+            <span>•</span>
+            <span>{f}</span>
+          </li>
+        ))}
+      </ul>
+      <div className="mt-8">{cta}</div>
+    </div>
+  );
+}
 
 export default function PricingPage() {
   return (
-    <main className="min-h-screen px-6 py-16 flex flex-col items-center text-center bg-gray-50">
-      <h1 className="text-4xl font-bold mb-6">SynapseWrite Pro Plans</h1>
-      <p className="text-gray-600 max-w-xl mb-12">
-        Upgrade to <strong>SynapseWrite Pro</strong> and unlock advanced AI
-        features, export options, and premium support.
-      </p>
+    <div className="mx-auto max-w-6xl px-6 py-16">
+      <div className="text-center">
+        <h1 className="text-4xl md:text-5xl font-bold">SynapseWrite Pro Plans</h1>
+        <p className="mt-3 text-gray-600">
+          Upgrade to <strong>SynapseWrite Pro</strong> and unlock advanced AI features, export options, and premium support.
+        </p>
+      </div>
 
-      <div className="border rounded-2xl shadow-md p-8 bg-white w-full max-w-md">
-        <h2 className="text-2xl font-semibold mb-2">Pro — Monthly Plan</h2>
-        <p className="text-gray-500 mb-6">₹99.00 / month</p>
+      <div className="mt-12 grid gap-8 md:grid-cols-3 place-items-center">
+        {/* Free */}
+        <Card
+          title="Free"
+          price="₹0"
+          features={["Basic AI editor", "Limited generations", "Community support"]}
+          cta={
+            <a
+              href="/signup"
+              className="inline-flex items-center justify-center rounded-xl border px-5 py-3 font-medium shadow-sm hover:bg-gray-50"
+            >
+              Create free account
+            </a>
+          }
+        />
 
-        <RazorpayCheckoutButton
-          planName="SynapseWrite Pro — Monthly"
-          amountInPaise={9900}
-          // customerEmail="user@example.com" // optional
-          // customerName="Anand Rao"        // optional
+        {/* Pro Monthly */}
+        <Card
+          title="Pro — Monthly"
+          price="₹499"
+          period="/ month"
+          features={[
+            "Unlimited generations",
+            "Priority queue",
+            "Export: Markdown & WordPress",
+            "Basic SEO scoring",
+            "Email support"
+          ]}
+          cta={<RazorpayCheckoutButton plan="pro-monthly" label="Subscribe — ₹499/mo" />}
+        />
+
+        {/* Pro Yearly */}
+        <Card
+          title="Pro — Yearly"
+          price="₹3,999"
+          period="/ year"
+          features={[
+            "Everything in Monthly",
+            "2 months free vs monthly",
+            "Priority support"
+          ]}
+          cta={<RazorpayCheckoutButton plan="pro-yearly" label="Subscribe — ₹3,999/yr" />}
         />
       </div>
 
-      <p className="text-sm text-gray-500 mt-8">
-        Payments are powered by Razorpay — secure and encrypted checkout.
+      <p className="mt-10 text-center text-sm text-gray-500">
+        Payments are powered by Razorpay — secure and encrypted checkout. In test mode, no real charges occur.
       </p>
-    </main>
+    </div>
   );
 }
