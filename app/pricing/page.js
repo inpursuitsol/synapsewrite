@@ -1,5 +1,6 @@
 // app/pricing/page.js
-import RazorpayCheckoutButton from "@/components/RazorpayCheckoutButton";
+import RazorpayCheckoutButton from "../../components/RazorpayCheckoutButton";
+
 
 export const metadata = {
   title: "Pricing — SynapseWrite",
