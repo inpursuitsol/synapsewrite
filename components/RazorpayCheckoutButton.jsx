@@ -30,12 +30,13 @@ export default function RazorpayCheckoutButton({ plan, label }) {
     document.body.appendChild(s);
   }, []);
 
+  // ✅ Handle checkout click
   async function handleClick() {
     try {
       console.log("🟡 Subscribe clicked for plan:", plan);
       setLoading(true);
 
-      // ✅ Try API call
+      // Create order
       const res = await axios.post("/api/razorpay/create-order", { planId: plan });
       console.log("🟢 API response:", res.data);
       const { ok, order } = res.data;
@@ -43,29 +44,31 @@ export default function RazorpayCheckoutButton({ plan, label }) {
 
       const key = process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID || "rzp_test_1234567890";
 
-      // ✅ Mock success if in test mode (skip Razorpay)
+      // ✅ Mock payment success (no real charge)
       if (String(key).includes("test")) {
-        alert("✅ Mock payment success! (No real charge)");
-        setLoading(false);
+        console.log("✅ Mock payment successful, redirecting to Thank You page...");
+        window.location.href = "/thank-you";
         return;
       }
 
-      // ✅ Normal Razorpay checkout
+      // ✅ Real Razorpay checkout (for live later)
       const options = {
         key,
         amount: order.amount,
         currency: "INR",
         name: "SynapseWrite",
-        description: order.notes?.plan === "pro-yearly"
-          ? "SynapseWrite Pro — Yearly"
-          : "SynapseWrite Pro — Monthly",
+        description:
+          order.notes?.plan === "pro-yearly"
+            ? "SynapseWrite Pro — Yearly"
+            : "SynapseWrite Pro — Monthly",
         order_id: order.id,
         handler: function (response) {
-          alert("Payment success: " + (response?.razorpay_payment_id || "test_payment"));
+          console.log("✅ Payment success:", response);
+          window.location.href = "/thank-you";
         },
         prefill: { name: "", email: "", contact: "" },
         notes: order.notes || {},
-        theme: { color: "#111827" }
+        theme: { color: "#111827" },
       };
 
       if (!window.Razorpay) throw new Error("Razorpay script not ready");
