@@ -1,4 +1,6 @@
 // app/api/razorpay/create-order/route.js
+console.log(">>> /api/razorpay/create-order invoked");
+
 import Razorpay from "razorpay";
 import { NextResponse } from "next/server";
 
