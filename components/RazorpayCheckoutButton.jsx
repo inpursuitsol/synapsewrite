@@ -36,7 +36,6 @@ export default function RazorpayCheckoutButton({
     try {
       setLoading(true);
 
-      // 1) Create order on server
       const orderRes = await fetch("/api/create-order", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -49,7 +48,6 @@ export default function RazorpayCheckoutButton({
       if (!orderRes.ok) throw new Error("Failed to create order");
       const order = await orderRes.json(); // { id, amount, currency }
 
-      // 2) Open Razorpay Checkout
       const rzp = new window.Razorpay({
         key: RAZORPAY_KEY,
         amount: order.amount,
@@ -61,7 +59,6 @@ export default function RazorpayCheckoutButton({
         theme: { color: "#000000" },
         handler: async (resp) => {
           try {
-            // 3) Verify on server
             const verifyRes = await fetch("/api/verify-payment", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
@@ -74,7 +71,6 @@ export default function RazorpayCheckoutButton({
             const verify = await verifyRes.json();
             if (!verifyRes.ok || verify?.valid !== true) throw new Error("Verification failed");
 
-            // 4) Redirect to Thank You
             const prettyAmount = `₹${(order.amount / 100).toFixed(2)} ${order.currency}`;
             const params = new URLSearchParams({
               status: "success",
