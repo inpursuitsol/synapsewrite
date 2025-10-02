@@ -1,24 +1,14 @@
 /** @type {import('tailwindcss').Config} */
+const typography = require("@tailwindcss/typography");
+
 module.exports = {
   content: [
-    "./app/**/*.{js,jsx,ts,tsx,mdx}",
-    "./components/**/*.{js,jsx,ts,tsx,mdx}"
+    "./app/**/*.{js,ts,jsx,tsx,mdx}",
+    "./pages/**/*.{js,ts,jsx,tsx,mdx}",
+    "./components/**/*.{js,ts,jsx,tsx,mdx}",
   ],
-  darkMode: "class",
   theme: {
-    extend: {
-      container: {
-        center: true,
-        padding: "1rem"
-      },
-      borderRadius: {
-        xl: "0.75rem",
-        "2xl": "1rem"
-      },
-      boxShadow: {
-        card: "0 4px 24px rgba(0,0,0,0.08)"
-      }
-    }
+    extend: {},
   },
-  plugins: [require("@tailwindcss/typography")]
+  plugins: [typography],
 };
