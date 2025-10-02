@@ -8,7 +8,7 @@ export default function RazorpayCheckoutButton({ plan, label }) {
   const [ready, setReady] = useState(false);
   const [loading, setLoading] = useState(false);
 
-  // Load Razorpay script
+  // Load Razorpay script once
   useEffect(() => {
     const id = "razorpay-checkout-js";
     if (document.getElementById(id)) {
@@ -30,32 +30,27 @@ export default function RazorpayCheckoutButton({ plan, label }) {
     document.body.appendChild(s);
   }, []);
 
+  // Handle subscribe click
   async function handleClick() {
     try {
       console.log("🟡 Subscribe clicked for plan:", plan);
       setLoading(true);
 
-      // Create mock order
+      // Always mock for now — skip real API
+      console.log("💡 Mock mode enabled — skipping Razorpay API");
+      await new Promise((r) => setTimeout(r, 1000)); // fake delay
+      console.log("✅ Mock payment successful. Redirecting to Thank You page...");
+      window.location.href = "/thank-you";
+      return;
+
+      // (Below code will be activated when we switch to real Razorpay)
+      /*
       const res = await axios.post("/api/razorpay/create-order", { planId: plan });
-      console.log("🟢 API response:", res.data);
       const { ok, order } = res.data;
       if (!ok || !order) throw new Error("Order creation failed");
 
-      const key =
-        process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID || "rzp_test_mock123456";
-      const mockMode =
-        process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID?.includes("mock") || true;
-
-      // ✅ Always mock for now
-      if (mockMode) {
-        console.log("✅ Mock payment successful. Redirecting...");
-        window.location.href = "/thank-you";
-        return;
-      }
-
-      // Live Razorpay (disabled for now)
       const options = {
-        key,
+        key: process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID,
         amount: order.amount,
         currency: "INR",
         name: "SynapseWrite",
@@ -70,13 +65,13 @@ export default function RazorpayCheckoutButton({ plan, label }) {
         theme: { color: "#111827" },
       };
 
-      if (!window.Razorpay) throw new Error("Razorpay script not ready");
       const rzp = new window.Razorpay(options);
-      rzp.on("payment.failed", function (resp) {
+      rzp.on("payment.failed", (resp) => {
         console.error("❌ Payment failed:", resp);
         alert("Payment failed: " + (resp?.error?.description || "Unknown error"));
       });
       rzp.open();
+      */
     } catch (e) {
       console.error("🚨 Checkout error:", e);
       alert("Oops! Something went wrong.\n" + e.message);
