@@ -1,10 +1,10 @@
 // app/pricing/page.js
+import { PLANS } from "../../lib/pricing";
 import RazorpayCheckoutButton from "../../components/RazorpayCheckoutButton";
-
 
 export const metadata = {
   title: "Pricing — SynapseWrite",
-  description: "Choose a plan that fits your writing workflow."
+  description: "Choose a plan that fits your writing workflow.",
 };
 
 function Card({ title, price, period, features, cta }) {
@@ -41,9 +41,9 @@ export default function PricingPage() {
       <div className="mt-12 grid gap-8 md:grid-cols-3 place-items-center">
         {/* Free */}
         <Card
-          title="Free"
-          price="₹0"
-          features={["Basic AI editor", "Limited generations", "Community support"]}
+          title={PLANS.free.name}
+          price={PLANS.free.displayPrice}
+          features={PLANS.free.features}
           cta={
             <a
               href="/signup"
@@ -56,30 +56,30 @@ export default function PricingPage() {
 
         {/* Pro Monthly */}
         <Card
-          title="Pro — Monthly"
-          price="₹499"
-          period="/ month"
-          features={[
-            "Unlimited generations",
-            "Priority queue",
-            "Export: Markdown & WordPress",
-            "Basic SEO scoring",
-            "Email support"
-          ]}
-          cta={<RazorpayCheckoutButton plan="pro-monthly" label="Subscribe — ₹499/mo" />}
+          title={PLANS.proMonthly.name}
+          price={PLANS.proMonthly.displayPrice}
+          period={PLANS.proMonthly.period}
+          features={PLANS.proMonthly.features}
+          cta={
+            <RazorpayCheckoutButton
+              plan={PLANS.proMonthly.id}
+              label={`Subscribe — ${PLANS.proMonthly.displayPrice}${PLANS.proMonthly.period}`}
+            />
+          }
         />
 
         {/* Pro Yearly */}
         <Card
-          title="Pro — Yearly"
-          price="₹3,999"
-          period="/ year"
-          features={[
-            "Everything in Monthly",
-            "2 months free vs monthly",
-            "Priority support"
-          ]}
-          cta={<RazorpayCheckoutButton plan="pro-yearly" label="Subscribe — ₹3,999/yr" />}
+          title={PLANS.proYearly.name}
+          price={PLANS.proYearly.displayPrice}
+          period={PLANS.proYearly.period}
+          features={PLANS.proYearly.features}
+          cta={
+            <RazorpayCheckoutButton
+              plan={PLANS.proYearly.id}
+              label={`Subscribe — ${PLANS.proYearly.displayPrice}${PLANS.proYearly.period}`}
+            />
+          }
         />
       </div>
 
