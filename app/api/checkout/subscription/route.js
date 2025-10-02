@@ -1,119 +1,52 @@
 // app/api/checkout/subscription/route.js
-import { NextResponse } from "next/server";
+import Razorpay from "razorpay";
 
-/**
- * Robust check for mock mode: accepts "true", "1", "yes" (case-insensitive)
- * or boolean-like values.
- */
-const isMockMode = (() => {
-  const v = process.env.RAZORPAY_MOCK;
-  if (typeof v === "string") {
-    return ["true", "1", "yes"].includes(v.trim().toLowerCase());
-  }
-  return Boolean(v);
-})();
-
-/**
- * Helper: return a JSON response with a given status
- */
-function jsonResponse(payload, status = 200) {
-  return NextResponse.json(payload, { status });
-}
-
-/**
- * Helper: build a fake subscription object for mock mode
- */
-function makeMockSubscription({ plan_id, total_count }) {
-  const now = Date.now();
-  const random = Math.floor(Math.random() * 90000) + 10000; // 10000-99999
-  return {
-    id: `sub_mock_${now}_${random}`,
-    plan_id: plan_id ?? null,
-    total_count: typeof total_count === "number" ? total_count : null,
-    status: "created",
-    mock: true,
-    created_at: new Date().toISOString(),
-  };
-}
-
-/**
- * Main POST handler
- */
-export async function POST(request) {
+export async function POST(req) {
   try {
-    // parse body
-    let body;
-    try {
-      body = await request.json();
-    } catch (err) {
-      return jsonResponse({ error: "Invalid JSON body" }, 400);
-    }
+    // Optional: let client override amount/currency; defaults below are fine
+    let payload = {};
+    try { payload = await req.json(); } catch {}
 
-    const { plan_id, total_count } = body ?? {};
+    const amount = Number(payload.amount) || 9900; // paise => ₹99.00
+    const currency = (payload.currency || "INR").toUpperCase();
+    const receipt = payload.receipt || `synapsewrite-pro-${Date.now()}`;
 
-    if (!plan_id) {
-      return jsonResponse({ error: "plan_id is required" }, 400);
-    }
+    // Make sure env vars exist on the server (Vercel Settings → Environment Variables)
+    const key_id = process.env.RAZORPAY_KEY_ID;
+    const key_secret = process.env.RAZORPAY_KEY_SECRET;
 
-    // If mock mode, return fake subscription
-    if (isMockMode) {
-      const mock = makeMockSubscription({ plan_id, total_count });
-      return jsonResponse(mock, 201);
-    }
-
-    // Not mock mode — require Razorpay keys
-    const RAZORPAY_KEY_ID = process.env.RAZORPAY_KEY_ID;
-    const RAZORPAY_KEY_SECRET = process.env.RAZORPAY_KEY_SECRET;
-
-    if (!RAZORPAY_KEY_ID || !RAZORPAY_KEY_SECRET) {
-      return jsonResponse(
-        { error: "Razorpay not configured on server" },
-        500
+    if (!key_id || !key_secret) {
+      return new Response(
+        JSON.stringify({ error: "Missing RAZORPAY_KEY_ID/RAZORPAY_KEY_SECRET" }),
+        { status: 500, headers: { "content-type": "application/json" } }
       );
     }
 
-    // Build form data for Razorpay subscription creation.
-    // Razorpay expects form-encoded values for many endpoints.
-    const params = new URLSearchParams();
-    params.append("plan_id", plan_id);
-    // Optional: append total_count if provided (some integrations may expect it)
-    if (typeof total_count !== "undefined") {
-      // Convert to string; Razorpay expects strings in form data
-      params.append("total_count", String(total_count));
-    }
+    const rzp = new Razorpay({ key_id, key_secret });
 
-    // Basic auth header
-    const auth = Buffer.from(`${RAZORPAY_KEY_ID}:${RAZORPAY_KEY_SECRET}`).toString("base64");
-    const resp = await fetch("https://api.razorpay.com/v1/subscriptions", {
-      method: "POST",
-      headers: {
-        Authorization: `Basic ${auth}`,
-        "Content-Type": "application/x-www-form-urlencoded",
-        Accept: "application/json",
-      },
-      body: params.toString(),
+    const order = await rzp.orders.create({
+      amount,          // in paise
+      currency,        // "INR"
+      receipt,         // any unique string
+      payment_capture: 1,
     });
 
-    const data = await resp.json();
-
-    if (!resp.ok) {
-      // Pass Razorpay error details through for easier debugging
-      return jsonResponse(
-        {
-          error: "Razorpay API error",
-          status: resp.status,
-          body: data,
-        },
-        502
-      );
-    }
-
-    // Successful real subscription creation — return Razorpay response
-    return jsonResponse(data, 201);
+    return new Response(JSON.stringify(order), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
   } catch (err) {
-    // unexpected server error
-    // (avoid printing secrets; only log message)
-    // If you want more debugging, add console.error(err) — Vercel logs will show it.
-    return jsonResponse({ error: "Internal server error", message: String(err) }, 500);
+    return new Response(
+      JSON.stringify({ error: err?.message || "Order creation failed" }),
+      { status: 500, headers: { "content-type": "application/json" } }
+    );
   }
+}
+
+// (Optional) simple GET for quick health check
+export async function GET() {
+  return new Response(JSON.stringify({ ok: true }), {
+    status: 200,
+    headers: { "content-type": "application/json" },
+  });
 }
