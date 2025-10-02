@@ -8,7 +8,7 @@ export default function RazorpayCheckoutButton({ plan, label }) {
   const [ready, setReady] = useState(false);
   const [loading, setLoading] = useState(false);
 
-  // Load Razorpay Checkout script once
+  // Load Razorpay script once
   useEffect(() => {
     const id = "razorpay-checkout-js";
     if (document.getElementById(id)) {
@@ -34,7 +34,6 @@ export default function RazorpayCheckoutButton({ plan, label }) {
       if (!ok) throw new Error("Order creation failed");
 
       const key = process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID || "rzp_test_1234567890";
-
       const isYearly = order?.notes?.plan === "pro-yearly";
 
       const options = {
@@ -42,18 +41,45 @@ export default function RazorpayCheckoutButton({ plan, label }) {
         amount: order.amount,
         currency: "INR",
         name: "SynapseWrite",
-        description: isYearly ? "SynapseWrite Pro — Yearly" : "SynapseWrite Pro — Monthly",
+        description: isYearly
+          ? "SynapseWrite Pro — Yearly"
+          : "SynapseWrite Pro — Monthly",
         order_id: order.id,
         handler: function (response) {
           alert(
             "Payment success (mock/test). Razorpay Payment ID: " +
               (response?.razorpay_payment_id || "test_payment")
           );
-          // TODO: Activate subscription in backend
         },
         prefill: { name: "", email: "", contact: "" },
         notes: order.notes || {},
         theme: { color: "#111827" }
       };
 
-      if (!window.Razorpay) throw new Error("Raz
+      if (!window.Razorpay) {
+        throw new Error("Razorpay script not loaded");
+      }
+
+      const rzp = new window.Razorpay(options);
+      rzp.on("payment.failed", function (resp) {
+        alert("Payment failed: " + (resp?.error?.description || "Unknown error"));
+      });
+      rzp.open();
+    } catch (e) {
+      console.error(e);
+      alert(e?.message || "Unable to open Razorpay");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <button
+      onClick={handleClick}
+      disabled={!ready || loading}
+      className="inline-flex items-center justify-center rounded-xl bg-black px-5 py-3 text-white font-medium shadow hover:opacity-90 disabled:opacity-50"
+    >
+      {loading ? "Processing..." : label || "Subscribe with Razorpay"}
+    </button>
+  );
+}
