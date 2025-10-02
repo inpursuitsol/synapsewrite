@@ -1,4 +1,6 @@
 // app/layout.js
+import './globals.css'
+
 export const metadata = {
   title: "SynapseWrite",
   description: "SynapseWrite — AI writing co-pilot",
