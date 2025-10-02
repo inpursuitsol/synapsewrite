@@ -1,114 +1,92 @@
+// components/RazorpayCheckoutButton.tsx
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
-import { useRouter } from "next/navigation";
+import { useEffect, useState } from "react";
+import axios from "axios";
 
-const RAZORPAY_KEY = process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID;
-
-function useRazorpayScript() {
-  const [ready, setReady] = useState(false);
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    if (window.Razorpay) { setReady(true); return; }
-    const script = document.createElement("script");
-    script.src = "https://checkout.razorpay.com/v1/checkout.js";
-    script.async = true;
-    script.onload = () => setReady(true);
-    script.onerror = () => setReady(false);
-    document.body.appendChild(script);
-    return () => { script.remove(); };
-  }, []);
-  return ready;
+declare global {
+  interface Window {
+    Razorpay?: any;
+  }
 }
 
-export default function RazorpayCheckoutButton({
-  planName,
-  amountInPaise,
-  customerEmail,
-  customerName,
-  className,
-}) {
-  const router = useRouter();
-  const ready = useRazorpayScript();
+type Props = {
+  plan: "pro-monthly" | "pro-yearly";
+  label?: string;
+};
+
+export default function RazorpayCheckoutButton({ plan, label }: Props) {
+  const [ready, setReady] = useState(false);
   const [loading, setLoading] = useState(false);
 
-  const handlePay = useCallback(async () => {
+  // Load Razorpay Checkout script
+  useEffect(() => {
+    const id = "razorpay-checkout-js";
+    if (document.getElementById(id)) {
+      setReady(true);
+      return;
+    }
+    const s = document.createElement("script");
+    s.id = id;
+    s.src = "https://checkout.razorpay.com/v1/checkout.js";
+    s.async = true;
+    s.onload = () => setReady(true);
+    s.onerror = () => setReady(false);
+    document.body.appendChild(s);
+  }, []);
+
+  async function handleClick() {
     try {
       setLoading(true);
+      const res = await axios.post("/api/razorpay/create-order", { plan });
+      const { ok, order } = res.data;
 
-      const orderRes = await fetch("/api/create-order", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          amount: amountInPaise,
-          currency: "INR",
-          notes: { plan: planName },
-        }),
-      });
-      if (!orderRes.ok) throw new Error("Failed to create order");
-      const order = await orderRes.json(); // { id, amount, currency }
+      if (!ok) throw new Error("Order creation failed");
 
-      const rzp = new window.Razorpay({
-        key: RAZORPAY_KEY,
+      const key = process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID || process.env.RAZORPAY_KEY_ID || "rzp_test_1234567890";
+
+      const options = {
+        key,
         amount: order.amount,
-        currency: order.currency,
-        name: "SynapseWrite Pro",
-        description: planName,
+        currency: "INR",
+        name: "SynapseWrite",
+        description: order.notes?.plan === "pro-yearly" ? "SynapseWrite Pro — Yearly" : "SynapseWrite Pro — Monthly",
         order_id: order.id,
-        prefill: { email: customerEmail, name: customerName },
-        theme: { color: "#000000" },
-        handler: async (resp) => {
-          try {
-            const verifyRes = await fetch("/api/verify-payment", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                razorpay_order_id: resp.razorpay_order_id,
-                razorpay_payment_id: resp.razorpay_payment_id,
-                razorpay_signature: resp.razorpay_signature,
-              }),
-            });
-            const verify = await verifyRes.json();
-            if (!verifyRes.ok || verify?.valid !== true) throw new Error("Verification failed");
-
-            const prettyAmount = `₹${(order.amount / 100).toFixed(2)} ${order.currency}`;
-            const params = new URLSearchParams({
-              status: "success",
-              amount: prettyAmount,
-              order_id: order.id,
-              email: customerEmail || "",
-            });
-            router.push(`/thanks?${params.toString()}`);
-          } catch (e) {
-            console.error(e);
-            alert("Payment verified, but redirect failed. Please check your subscription page.");
-          }
+        handler: function (response: any) {
+          // Payment success handler — for MOCK you’ll land here immediately
+          alert("Payment success (mock/test). Razorpay ID: " + (response.razorpay_payment_id || "test_payment"));
+          // TODO: call your backend to mark subscription active for user
         },
-        modal: { ondismiss: () => setLoading(false), escape: true, confirm_close: true },
-        retry: { enabled: true, max_count: 1 },
-      });
+        prefill: {
+          name: "",
+          email: "",
+          contact: ""
+        },
+        notes: order.notes || {},
+        theme: { color: "#111827" }
+      };
 
-      rzp.on("payment.failed", (resp) => {
-        console.error("Payment failed", resp?.error);
-        alert(resp?.error?.description || "Payment failed. Please try again.");
-        setLoading(false);
+      if (!window.Razorpay) throw new Error("Razorpay script not ready");
+      const rzp = new window.Razorpay(options);
+      rzp.on("payment.failed", function (resp: any) {
+        alert("Payment failed: " + (resp.error?.description || "Unknown error"));
       });
-
       rzp.open();
-    } catch (err) {
-      console.error(err);
-      alert("Something went wrong while starting the payment. Please try again.");
+    } catch (e: any) {
+      console.error(e);
+      alert(e?.message || "Unable to open Razorpay");
+    } finally {
       setLoading(false);
     }
-  }, [amountInPaise, planName, customerEmail, customerName, router]);
+  }
 
   return (
     <button
+      onClick={handleClick}
       disabled={!ready || loading}
-      onClick={handlePay}
-      className={className || "px-4 py-2 rounded-xl bg-black text-white disabled:opacity-50"}
+      className="inline-flex items-center justify-center rounded-xl bg-black px-5 py-3 text-white font-medium shadow hover:opacity-90 disabled:opacity-50"
     >
-      {loading ? "Processing…" : "Subscribe with Razorpay"}
+      {loading ? "Processing..." : label ?? "Subscribe with Razorpay"}
     </button>
   );
 }
