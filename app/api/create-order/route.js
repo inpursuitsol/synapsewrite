@@ -1,47 +1,56 @@
-// app/api/create-order/route.js
+// app/api/razorpay/create-order/route.js
+import Razorpay from "razorpay";
 import { NextResponse } from "next/server";
-export const runtime = "nodejs"; // enable Node APIs (Buffer)
+
+function inPaise(amountInRupees) {
+  return Math.round(amountInRupees * 100);
+}
 
 export async function POST(req) {
   try {
-    const { amountINR, receipt = `rcpt_${Date.now()}` } = await req.json();
+    const { planId } = await req.json();
 
-    if (!amountINR || isNaN(Number(amountINR))) {
-      return NextResponse.json({ error: "amountINR required (number)" }, { status: 400 });
+    const pricing = {
+      "pro-monthly": { amount: 499, notes: { plan: "pro-monthly" }, description: "SynapseWrite Pro — Monthly" },
+      "pro-yearly": { amount: 3999, notes: { plan: "pro-yearly" }, description: "SynapseWrite Pro — Yearly" }
+    };
+
+    if (!planId || !pricing[planId]) {
+      return NextResponse.json({ error: "Invalid planId" }, { status: 400 });
+    }
+
+    const MOCK = String(process.env.RAZORPAY_MOCK || "").toLowerCase() === "true";
+
+    if (MOCK) {
+      const amount = inPaise(pricing[planId].amount);
+      const fakeOrder = {
+        id: "order_MOCK_" + Math.random().toString(36).slice(2),
+        amount,
+        currency: "INR",
+        receipt: "rcpt_" + Date.now(),
+        notes: pricing[planId].notes
+      };
+      return NextResponse.json({ ok: true, order: fakeOrder });
     }
 
     const key_id = process.env.RAZORPAY_KEY_ID;
     const key_secret = process.env.RAZORPAY_KEY_SECRET;
     if (!key_id || !key_secret) {
-      return NextResponse.json({ error: "Razorpay env vars missing" }, { status: 500 });
+      return NextResponse.json({ error: "Razorpay keys missing" }, { status: 500 });
     }
 
-    // Call Razorpay REST API using Basic Auth (no SDK needed)
-    const auth = Buffer.from(`${key_id}:${key_secret}`).toString("base64");
-    const response = await fetch("https://api.razorpay.com/v1/orders", {
-      method: "POST",
-      headers: {
-        Authorization: `Basic ${auth}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        amount: Math.round(Number(amountINR) * 100), // convert ₹ → paise
-        currency: "INR",
-        receipt,
-        payment_capture: 1,
-      }),
+    const instance = new Razorpay({ key_id, key_secret });
+
+    const order = await instance.orders.create({
+      amount: inPaise(pricing[planId].amount),
+      currency: "INR",
+      receipt: "rcpt_" + Date.now(),
+      notes: pricing[planId].notes
     });
 
-    if (!response.ok) {
-      const msg = await response.text();
-      console.error("Razorpay order error:", msg);
-      return NextResponse.json({ error: "Order creation failed" }, { status: 500 });
-    }
-
-    const order = await response.json();
-    return NextResponse.json({ order });
+    return NextResponse.json({ ok: true, order });
   } catch (err) {
-    console.error("create-order exception:", err);
-    return NextResponse.json({ error: "Internal error" }, { status: 500 });
+    console.error("Razorpay create-order error", err);
+    return NextResponse.json({ error: "Failed to create order" }, { status: 500 });
   }
 }
