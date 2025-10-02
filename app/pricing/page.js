@@ -1,5 +1,5 @@
 // app/pricing/page.js
-import RazorpayCheckoutButton from "@/components/RazorpayCheckoutButton";
+import RazorpayCheckoutButton from "../../components/RazorpayCheckoutButton";
 
 export default function PricingPage() {
   return (
@@ -10,17 +10,15 @@ export default function PricingPage() {
         export options, and premium support.
       </p>
 
-      {/* Pricing Card */}
       <div className="border rounded-2xl shadow-md p-8 bg-white w-full max-w-md">
         <h2 className="text-2xl font-semibold mb-2">Pro — Monthly Plan</h2>
         <p className="text-gray-500 mb-6">₹99.00 / month</p>
 
-        {/* Razorpay Payment Button */}
         <RazorpayCheckoutButton
           planName="SynapseWrite Pro — Monthly"
           amountInPaise={9900} // ₹99.00 in paise
-          customerEmail="user@example.com" // optional
-          customerName="Anand Rao" // optional
+          // customerEmail="user@example.com" // optional
+          // customerName="Anand Rao"        // optional
         />
       </div>
 
