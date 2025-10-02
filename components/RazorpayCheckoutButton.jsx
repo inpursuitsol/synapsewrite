@@ -4,49 +4,38 @@ import { useCallback } from "react";
 
 export default function RazorpayCheckoutButton({ amountPaise = 9900, planName = "Pro Monthly" }) {
   const handleClick = useCallback(async () => {
-    // 1) Create an order on our server
     const res = await fetch("/api/checkout/subscription", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ amount: amountPaise, currency: "INR" }), // e.g. 9900 = ₹99.00
+      body: JSON.stringify({ amount: amountPaise, currency: "INR" }),
     });
 
+    const text = await res.text();
     if (!res.ok) {
-      alert("Could not create order. Please try again.");
+      try {
+        const data = JSON.parse(text);
+        alert(data?.error || "Could not create order.");
+      } catch {
+        alert(text || "Could not create order.");
+      }
       return;
     }
-    const order = await res.json(); // { id, amount, currency, ... }
 
-    // 2) Open Razorpay Checkout with the order_id
+    const order = JSON.parse(text);
     const key = process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID;
-    if (!key) {
-      alert("Missing NEXT_PUBLIC_RAZORPAY_KEY_ID");
-      return;
-    }
-
-    const options = {
-      key,
-      order_id: order.id,                 // IMPORTANT: use server-created order
-      name: "SynapseWrite",
-      description: planName,
-      // prefill: { email: "", contact: "" }, // optional
-      theme: { color: "#0f172a" },
-      handler: function () {
-        // success
-        window.location.href = "/thank-you";
-      },
-      modal: {
-        ondismiss: function () {
-          // user closed the modal
-        },
-      },
-    };
+    if (!key) return alert("Missing NEXT_PUBLIC_RAZORPAY_KEY_ID");
 
     // eslint-disable-next-line no-undef
-    const rzp = new window.Razorpay(options);
-    rzp.on("payment.failed", function () {
-      alert("Payment Failed. Please try again.");
+    const rzp = new window.Razorpay({
+      key,
+      order_id: order.id,
+      name: "SynapseWrite",
+      description: planName,
+      theme: { color: "#0f172a" },
+      handler: () => (window.location.href = "/thank-you"),
     });
+
+    rzp.on("payment.failed", () => alert("Payment Failed. Please try again."));
     rzp.open();
   }, [amountPaise, planName]);
 
