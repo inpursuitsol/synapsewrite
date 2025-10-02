@@ -8,7 +8,7 @@ export default function RazorpayCheckoutButton({ plan, label }) {
   const [ready, setReady] = useState(false);
   const [loading, setLoading] = useState(false);
 
-  // ✅ Load Razorpay script
+  // Load Razorpay script
   useEffect(() => {
     const id = "razorpay-checkout-js";
     if (document.getElementById(id)) {
@@ -30,37 +30,36 @@ export default function RazorpayCheckoutButton({ plan, label }) {
     document.body.appendChild(s);
   }, []);
 
-  // ✅ Handle checkout click
   async function handleClick() {
     try {
       console.log("🟡 Subscribe clicked for plan:", plan);
       setLoading(true);
 
-      // Create order
+      // Create mock order
       const res = await axios.post("/api/razorpay/create-order", { planId: plan });
       console.log("🟢 API response:", res.data);
       const { ok, order } = res.data;
       if (!ok || !order) throw new Error("Order creation failed");
 
-      const key = process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID || "rzp_test_1234567890";
+      const key =
+        process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID || "rzp_test_mock123456";
+      const mockMode =
+        process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID?.includes("mock") || true;
 
-      // ✅ Mock payment success (no real charge)
-      if (String(key).includes("test")) {
-        console.log("✅ Mock payment successful, redirecting to Thank You page...");
+      // ✅ Always mock for now
+      if (mockMode) {
+        console.log("✅ Mock payment successful. Redirecting...");
         window.location.href = "/thank-you";
         return;
       }
 
-      // ✅ Real Razorpay checkout (for live later)
+      // Live Razorpay (disabled for now)
       const options = {
         key,
         amount: order.amount,
         currency: "INR",
         name: "SynapseWrite",
-        description:
-          order.notes?.plan === "pro-yearly"
-            ? "SynapseWrite Pro — Yearly"
-            : "SynapseWrite Pro — Monthly",
+        description: "SynapseWrite Pro Subscription",
         order_id: order.id,
         handler: function (response) {
           console.log("✅ Payment success:", response);
