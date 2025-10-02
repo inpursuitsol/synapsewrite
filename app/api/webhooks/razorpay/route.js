@@ -1,35 +1,37 @@
 // app/api/webhooks/razorpay/route.js
-import crypto from 'crypto';
+import crypto from "crypto";
 
-
-const WEBHOOK_SECRET = process.env.RAZORPAY_WEBHOOK_SECRET;
-
+export const dynamic = "force-dynamic";
+export const runtime = "nodejs";
 
 export async function POST(req) {
-const bodyText = await req.text();
-const signature = req.headers.get('x-razorpay-signature');
+  const webhookSecret = process.env.RAZORPAY_WEBHOOK_SECRET;
+  if (!webhookSecret) {
+    return new Response("Missing RAZORPAY_WEBHOOK_SECRET", { status: 500 });
+  }
 
+  const rawBody = await req.text();
+  const signature = req.headers.get("x-razorpay-signature") || "";
 
-if (!WEBHOOK_SECRET) {
-console.error('No webhook secret set');
-return new Response('Webhook misconfigured', { status: 500 });
-}
+  // Verify webhook signature
+  const expected = crypto.createHmac("sha256", webhookSecret).update(rawBody).digest("hex");
+  const valid = signature === expected;
+  if (!valid) return new Response("Invalid signature", { status: 400 });
 
+  // Parse the event
+  let event;
+  try {
+    event = JSON.parse(rawBody);
+  } catch {
+    return new Response("Bad payload", { status: 400 });
+  }
 
-const expected = crypto.createHmac('sha256', WEBHOOK_SECRET).update(bodyText).digest('hex');
-if (expected !== signature) {
-console.warn('Webhook signature mismatch', { expected, signature });
-return new Response('Invalid signature', { status: 400 });
-}
+  // Example: handle captured payment
+  if (event?.event === "payment.captured") {
+    // const paymentId = event.payload.payment.entity.id;
+    // const orderId = event.payload.payment.entity.order_id;
+    // TODO: mark order as paid in DB (future when auth/DB exist)
+  }
 
-
-const event = JSON.parse(bodyText);
-// handle relevant events: payment.captured, payment.failed, subscription.charged, subscription.cancelled, etc.
-console.log('Razorpay webhook event:', event.event, event.payload?.payment, event.payload?.subscription);
-
-
-// TODO: implement your business logic (save subscription id, map to user, activate access, etc.)
-
-
-return new Response(JSON.stringify({ received: true }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+  return new Response("ok", { status: 200 });
 }
